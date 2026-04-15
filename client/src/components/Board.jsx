@@ -5,6 +5,7 @@ import api from "../services/api";
 import socket from "../socket";
 import TaskCard from "./TaskCard";
 import TaskModal from "./TaskModal";
+import FilterBar from "./FilterBar";
 
 const columns = ["TASK", "IN PROGRESS", "REVIEW", "COMPLETED"];
 const BOARD_THEMES = {
@@ -224,6 +225,12 @@ export default function Board({
   const [taskComments, setTaskComments] = useState([]);
   const [taskAttachments, setTaskAttachments] = useState([]);
   const [taskModalLoading, setTaskModalLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [memberFilter, setMemberFilter] = useState("");
+  const [serverSearchIds, setServerSearchIds] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [taskDraft, setTaskDraft] = useState({
     title: "",
     description: "",
@@ -232,16 +239,109 @@ export default function Board({
     mentorNote: "",
   });
 
+  const filteredTasks = useMemo(() => {
+    const search = debouncedSearchQuery.trim().toLowerCase();
+    const member = memberFilter.trim().toLowerCase();
+    const hasServerSearch = search && projectId !== "default" && serverSearchIds instanceof Set;
+
+    return tasks
+      .filter((task) => {
+        if (!search) {
+          return true;
+        }
+
+        if (hasServerSearch) {
+          return serverSearchIds.has(String(task.id));
+        }
+
+        return [task.title, task.description, task.assignee]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(search));
+      })
+      .filter((task) => (statusFilter ? task.status === statusFilter : true))
+      .filter((task) => {
+        if (!member) {
+          return true;
+        }
+
+        return String(task.assignee || "").toLowerCase().includes(member);
+      });
+  }, [tasks, debouncedSearchQuery, statusFilter, memberFilter, projectId, serverSearchIds]);
+
   const tasksByColumn = useMemo(() => {
     return columns.reduce((acc, column) => {
-      acc[column] = tasks
+      acc[column] = filteredTasks
         .filter((task) => task.status === column)
         .sort((a, b) => a.order - b.order);
       return acc;
     }, {});
+  }, [filteredTasks]);
+
+  const memberOptions = useMemo(() => {
+    const names = new Set(
+      tasks
+        .map((task) => String(task.assignee || "").trim())
+        .filter(Boolean)
+    );
+
+    return [...names].sort((a, b) => a.localeCompare(b));
   }, [tasks]);
 
   const boardTheme = BOARD_THEMES[projectAccent] || BOARD_THEMES["from-cyan-700 to-teal-500"];
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    const query = debouncedSearchQuery.trim();
+
+    if (!query || projectId === "default") {
+      setServerSearchIds(null);
+      setSearchLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    setSearchLoading(true);
+
+    api
+      .get("/tasks/search", {
+        params: {
+          q: query,
+          projectId,
+        },
+      })
+      .then((response) => {
+        if (!isMounted) {
+          return;
+        }
+
+        const ids = Array.isArray(response.data)
+          ? response.data.map((task) => String(task.id))
+          : [];
+        setServerSearchIds(new Set(ids));
+      })
+      .catch(() => {
+        if (isMounted) {
+          // Fallback to client-side search when API search is unavailable.
+          setServerSearchIds(null);
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setSearchLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [debouncedSearchQuery, projectId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -857,6 +957,27 @@ export default function Board({
             </div>
           )}
 
+          <FilterBar
+            search={searchQuery}
+            setSearch={setSearchQuery}
+            status={statusFilter}
+            setStatus={setStatusFilter}
+            member={memberFilter}
+            setMember={setMemberFilter}
+            memberOptions={memberOptions}
+            resultCount={filteredTasks.length}
+            totalCount={tasks.length}
+            searchLoading={searchLoading}
+            onClear={() => {
+              setSearchQuery("");
+              setDebouncedSearchQuery("");
+              setStatusFilter("");
+              setMemberFilter("");
+              setServerSearchIds(null);
+              setSearchLoading(false);
+            }}
+          />
+
           <div className="relative overflow-hidden rounded-[26px] border border-white/40 bg-[linear-gradient(160deg,rgba(255,255,255,0.5),rgba(255,255,255,0.14))] p-4 shadow-[0_24px_60px_rgba(15,23,42,0.16)]">
             <div className="pointer-events-none absolute -right-10 -top-24 h-72 w-72 rounded-full border border-white/35 bg-white/10" />
             <div className="pointer-events-none absolute -bottom-28 right-20 h-80 w-80 rounded-full border border-white/25" />
@@ -878,6 +999,12 @@ export default function Board({
                 />
               ))}
             </div>
+
+            {!loadingTasks && filteredTasks.length === 0 && (
+              <div className="relative mt-4 rounded-2xl border border-dashed border-slate-300 bg-white/85 px-4 py-6 text-center text-sm text-slate-500">
+                No tasks match these filters. Try clearing one or more filters.
+              </div>
+            )}
           </div>
         </div>
 

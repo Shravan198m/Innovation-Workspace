@@ -44,6 +44,53 @@ async function fetchTaskById(taskId) {
   );
 }
 
+router.get("/search", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  const projectId = req.query.projectId ? Number(req.query.projectId) : null;
+
+  if (!q) {
+    return res.json([]);
+  }
+
+  const params = [`%${q}%`];
+  let whereProject = "";
+
+  if (projectId && Number.isInteger(projectId)) {
+    params.push(projectId);
+    whereProject = ` AND project_id = $${params.length}`;
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id,
+              title,
+              status,
+              description,
+              due_date AS "dueDate",
+              assignee,
+              comments,
+              approval_status AS "approvalStatus",
+              mentor_note AS "mentorNote",
+              order_index AS "order",
+              updated_at AS "updatedAt",
+              project_id AS "projectId"
+       FROM tasks
+       WHERE (
+         title ILIKE $1
+         OR COALESCE(description, '') ILIKE $1
+         OR COALESCE(assignee, '') ILIKE $1
+       )${whereProject}
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 200`,
+      params
+    );
+
+    return res.json(result.rows);
+  } catch {
+    return res.status(500).json({ message: "Failed to search tasks." });
+  }
+});
+
 router.get("/:projectId", async (req, res) => {
   try {
     const result = await pool.query(
