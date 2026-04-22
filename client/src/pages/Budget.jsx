@@ -3,6 +3,7 @@ import BudgetTab from "./BudgetTab";
 import ProjectWorkspaceShell from "../components/ProjectWorkspaceShell";
 import { useAuth } from "../context/AuthContext";
 import { useProjects } from "../context/ProjectsContext";
+import { normalizeRole, canViewBudget } from "../utils/roles";
 
 export default function Budget() {
   const { projectId } = useParams();
@@ -14,11 +15,16 @@ export default function Budget() {
     return <Navigate to="/projects" replace />;
   }
 
+  const normalizedRole = normalizeRole(user?.role);
+  if (!canViewBudget(normalizedRole)) {
+    return <Navigate to={`/projects/${project.id}/board`} replace />;
+  }
+
   return (
     <ProjectWorkspaceShell project={project}>
       <BudgetTab
         projectId={project.id}
-        currentUserRole={user?.role || "STUDENT"}
+        currentUserRole={normalizedRole}
         projectAccent={project.accent}
       />
     </ProjectWorkspaceShell>

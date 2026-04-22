@@ -71,6 +71,61 @@ npm start
 
 ---
 
+### **STEP 5: Configure Project Assignment Emails (Resend)**
+
+Server email flow is already wired in [server/routes/projectRoutes.js](server/routes/projectRoutes.js) and [server/lib/email.js](server/lib/email.js).
+
+Create or update [server/.env](server/.env) with:
+
+```env
+RESEND_API_KEY=your_resend_api_key_here
+RESEND_FROM="Shiktra Technologies <noreply@shiktratechnologies.com>"
+```
+
+Temporary sender for quick testing:
+
+```env
+RESEND_FROM="Shiktra Technologies <onboarding@resend.dev>"
+```
+
+Run a direct email test:
+
+```bash
+cd server
+npm run test:project-assignment-email -- --to=you@example.com --name="Test User" --projectName="Demo" --role="Student"
+```
+
+If email send fails with `403`/domain verification errors:
+
+1. Open https://resend.com/domains
+2. Verify your domain (for example `shiktratechnologies.com`)
+3. Add SPF and DKIM DNS records at your DNS provider
+4. Retry the test script
+
+When creating a project through API, the response now includes an `emailSummary` block so you can verify recipient-level delivery outcome immediately.
+
+Example response shape:
+
+```json
+{
+  "id": 123,
+  "name": "Demo Project",
+  "emailSummary": {
+    "total": 3,
+    "sent": 2,
+    "failed": 1,
+    "results": [
+      { "recipient": "mentor@example.com", "status": "sent", "messageId": "..." },
+      { "recipient": "student@example.com", "status": "failed", "reason": "Resend API error (...)" }
+    ]
+  }
+}
+```
+
+Use this to confirm whether failures are from email delivery or from project creation logic.
+
+---
+
 ## 🧪 TESTING THE SYSTEM
 
 ### **Test 1: View Team Members**

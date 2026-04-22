@@ -1,4 +1,5 @@
 const pool = require("../db");
+const { normalizeRole } = require("../middleware/role");
 
 async function notifyUsersByIds({ userIds, message, projectId, io }) {
   if (!Array.isArray(userIds) || userIds.length === 0 || !message) {
@@ -33,10 +34,12 @@ async function notifyRoles({ roles, message, projectId, io }) {
     return;
   }
 
+  const normalizedRoles = [...new Set(roles.map(normalizeRole))];
+
   try {
     const recipients = await pool.query(
       `SELECT id FROM users WHERE role = ANY($1::text[])`,
-      [roles]
+      [normalizedRoles]
     );
 
     if (recipients.rowCount === 0) {

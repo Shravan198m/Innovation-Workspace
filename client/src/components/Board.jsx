@@ -1,13 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { DndContext, closestCenter, useDroppable } from "@dnd-kit/core";
 import { SortableContext, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { AnimatePresence } from "framer-motion";
 import api from "../services/api";
 import socket from "../socket";
 import TaskCard from "./TaskCard";
 import TaskModal from "./TaskModal";
 import FilterBar from "./FilterBar";
+import SkeletonCard from "./SkeletonCard";
+import InfoTip from "./InfoTip";
+import { getApiErrorMessage } from "../services/apiError";
+import { canReviewWork, canManageTasks as canManageTaskRole, isManagerRole, normalizeRole } from "../utils/roles";
 
-const columns = ["TASK", "IN PROGRESS", "REVIEW", "COMPLETED"];
+const columns = ["todo", "submitted", "completed", "rejected"];
+const columnLabels = {
+  todo: "To Do",
+  submitted: "Submitted",
+  completed: "Completed",
+  rejected: "Rejected",
+};
 const BOARD_THEMES = {
   "from-emerald-600 to-teal-500": {
     canvas:
@@ -73,46 +84,40 @@ const BOARD_THEMES = {
     header: "bg-gradient-to-r from-orange-600 to-amber-500",
   },
 };
-const initialTasks = [
-  {
-    id: "1",
-    title: "Design UI",
-    description: "Create the first polished interface for the project board.",
-    dueDate: "2026-04-25",
-    assignee: "Priya Rao",
-    comments: [
-      { id: "c1", author: "Mentor", text: "Focus on spacing and hierarchy first." },
-    ],
-    status: "TASK",
-    order: 0,
-    approvalStatus: "not-requested",
-    mentorNote: "Good progress, keep the board clean and minimal.",
-    updatedAt: "",
-  },
-  {
-    id: "2",
-    title: "Setup Backend",
-    description: "Prepare APIs, authentication, and task persistence.",
-    dueDate: "2026-04-28",
-    assignee: "Vinay Kumar",
-    comments: [],
-    status: "IN PROGRESS",
-    order: 0,
-    approvalStatus: "not-requested",
-    mentorNote: "",
-    updatedAt: "",
-  },
-];
-
 const defaultTaskFields = {
   description: "",
   dueDate: "",
+  taskType: "weekly",
+  createdBy: "",
   assignee: "",
   comments: [],
   approvalStatus: "not-requested",
+  rejectionReason: "",
   mentorNote: "",
   updatedAt: "",
 };
+
+function normalizeTaskType(taskType) {
+  return String(taskType || "weekly").trim().toLowerCase() === "daily" ? "daily" : "weekly";
+}
+
+function getAutoDueDate(taskType) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  if (normalizeTaskType(taskType) === "weekly") {
+    date.setDate(date.getDate() + 7);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeTaskStatus(status) {
+  const normalizedStatus = String(status || "todo").trim().toLowerCase();
+  if (normalizedStatus === "approved") {
+    return "completed";
+  }
+
+  return columns.includes(normalizedStatus) ? normalizedStatus : "todo";
+}
 
 function normalizeTask(task) {
   return {
@@ -120,9 +125,13 @@ function normalizeTask(task) {
     ...task,
     description: task.description || "",
     dueDate: task.dueDate || "",
+    taskType: normalizeTaskType(task.taskType),
+    createdBy: task.createdBy || "",
     assignee: task.assignee || "",
     comments: Array.isArray(task.comments) ? task.comments : [],
+    status: normalizeTaskStatus(task.status),
     mentorNote: task.mentorNote || "",
+    rejectionReason: task.rejectionReason || "",
     approvalStatus: task.approvalStatus || "not-requested",
     updatedAt: task.updatedAt || "",
   };
@@ -131,6 +140,8 @@ function normalizeTask(task) {
 function BoardColumn({
   column,
   columnTasks,
+  canCreateTask,
+  taskType,
   boardTheme,
   inputVisible,
   inputText,
@@ -145,16 +156,18 @@ function BoardColumn({
   return (
     <article
       ref={setNodeRef}
-      className={`w-[20rem] rounded-2xl border p-3 transition-all duration-150 ${
-        isOver ? boardTheme.dragColumn : "border-white/60 bg-slate-100/95 shadow-[0_10px_26px_rgba(15,23,42,0.09)]"
+      className={`glass-card min-w-[280px] flex-shrink-0 rounded-2xl p-3 backdrop-blur-md transition-all duration-150 ${
+        isOver
+          ? "ring-2 ring-cyan-200 shadow-[0_18px_40px_rgba(8,145,178,0.14)]"
+          : "shadow-[0_12px_30px_rgba(15,23,42,0.08)]"
       }`}
     >
-      <div className="mb-3 flex items-center justify-between rounded-xl bg-slate-200/90 px-3 py-2 text-slate-700">
+      <div className="mb-3 flex items-center justify-between rounded-xl bg-white/55 px-3 py-2 text-slate-700 backdrop-blur-sm">
         <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-slate-500" />
-          <h3 className="text-[12px] font-semibold uppercase tracking-[0.08em]">{column}</h3>
+          <span className="h-2 w-2 rounded-full bg-gradient-to-r from-blue-500 to-teal-500" />
+          <h3 className="text-[12px] font-semibold uppercase tracking-[0.08em]">{columnLabels[column] || column}</h3>
         </div>
-        <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 shadow-sm">
+        <span className="glass-pill rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm">
           {columnTasks.length}
         </span>
       </div>
@@ -167,53 +180,63 @@ function BoardColumn({
         </div>
       </SortableContext>
 
-      {inputVisible[column] ? (
+      {inputVisible[column] && canCreateTask ? (
         <>
           <input
             value={inputText[column] || ""}
             onChange={(event) => onChange(column, event.target.value)}
             onKeyDown={(event) => onKeyDown(event, column)}
             placeholder="Enter task..."
-            className="mt-3 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+            className="glass-input mt-3 w-full rounded-xl px-3 py-2 text-sm"
           />
 
           <div className="mt-2 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onAddTask(column)}
-              className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-              disabled={!(inputText[column] || "").trim()}
+              onClick={() => onAddTask(column, taskType)}
+              className="glass-button-primary rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+              disabled={!canCreateTask || !(inputText[column] || "").trim()}
             >
-              Add
+              {taskType === "daily" ? "Add Daily" : "Add Weekly"}
             </button>
 
             <button
               type="button"
               onClick={() => onToggleInput(column)}
-              className="rounded-lg px-2 py-1 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+              className="glass-button-secondary rounded-lg px-2 py-1 text-sm"
             >
               Cancel
             </button>
           </div>
         </>
-      ) : (
+      ) : canCreateTask ? (
         <button
           type="button"
           onClick={() => onToggleInput(column)}
-          className="mt-2 w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-600 transition duration-150 hover:bg-slate-200/80 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+          disabled={!canCreateTask}
+          className="glass-button-secondary mt-2 w-full rounded-lg px-3 py-2 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          + Add a card
+          {taskType === "daily" ? "+ Add daily card" : "+ Add weekly card"}
         </button>
-      )}
+      ) : null
+      }
     </article>
   );
 }
 
 export default function Board({
-  currentUserRole = "STUDENT",
-  projectId = "default",
+  currentUserRole = "student",
+  currentUserName = "",
+  currentUserEmail = "",
+  projectId = null,
   projectAccent = "from-cyan-700 to-teal-500",
 }) {
+  const normalizedRole = normalizeRole(currentUserRole);
+  const isStudent = normalizedRole === "student";
+  const isManager = isManagerRole(currentUserRole);
+  const canReviewTasks = canReviewWork(currentUserRole);
+  const canManageTaskBoard = canManageTaskRole(currentUserRole) || isManager;
+  const canCreateTasks = canManageTaskBoard;
   const [tasks, setTasks] = useState([]);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [restrictionMessage, setRestrictionMessage] = useState("");
@@ -225,6 +248,8 @@ export default function Board({
   const [taskComments, setTaskComments] = useState([]);
   const [taskAttachments, setTaskAttachments] = useState([]);
   const [taskModalLoading, setTaskModalLoading] = useState(false);
+  const [taskActionBusy, setTaskActionBusy] = useState(false);
+  const [todoTaskType, setTodoTaskType] = useState("weekly");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -242,7 +267,7 @@ export default function Board({
   const filteredTasks = useMemo(() => {
     const search = debouncedSearchQuery.trim().toLowerCase();
     const member = memberFilter.trim().toLowerCase();
-    const hasServerSearch = search && projectId !== "default" && serverSearchIds instanceof Set;
+    const hasServerSearch = search && Boolean(projectId) && serverSearchIds instanceof Set;
 
     return tasks
       .filter((task) => {
@@ -289,6 +314,13 @@ export default function Board({
 
   const boardTheme = BOARD_THEMES[projectAccent] || BOARD_THEMES["from-cyan-700 to-teal-500"];
 
+  const isOwnTask = (task) => {
+    const assignee = String(task?.assignee || "").trim().toLowerCase();
+    const userName = String(currentUserName || "").trim().toLowerCase();
+    const userEmail = String(currentUserEmail || "").trim().toLowerCase();
+    return Boolean(assignee) && (assignee === userName || assignee === userEmail);
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery);
@@ -300,7 +332,7 @@ export default function Board({
   useEffect(() => {
     const query = debouncedSearchQuery.trim();
 
-    if (!query || projectId === "default") {
+    if (!query || !projectId) {
       setServerSearchIds(null);
       setSearchLoading(false);
       return;
@@ -350,8 +382,9 @@ export default function Board({
       setLoadingTasks(true);
       setRestrictionMessage("");
 
-      if (projectId === "default") {
-        setTasks(initialTasks.map(normalizeTask));
+      if (!projectId) {
+        setTasks([]);
+        setRestrictionMessage("No project selected.");
         setLoadingTasks(false);
         return;
       }
@@ -367,10 +400,10 @@ export default function Board({
         } else {
           setTasks([]);
         }
-      } catch {
+      } catch (error) {
         if (isMounted) {
-          setTasks(initialTasks.map(normalizeTask));
-          setRestrictionMessage("Using offline task data. Start backend to sync tasks.");
+          setTasks([]);
+          setRestrictionMessage(getApiErrorMessage(error, "Failed to load tasks from backend."));
         }
       } finally {
         if (isMounted) {
@@ -387,7 +420,7 @@ export default function Board({
   }, [projectId]);
 
   useEffect(() => {
-    if (!projectId || projectId === "default") {
+    if (!projectId) {
       return undefined;
     }
 
@@ -432,26 +465,48 @@ export default function Board({
     setInputVisible((prev) => ({ ...prev, [column]: !prev[column] }));
   };
 
+  const openTodoInputForType = (taskType) => {
+    setTodoTaskType(normalizeTaskType(taskType));
+    setInputVisible((prev) => ({ ...prev, todo: true }));
+  };
+
   const handleChange = (column, value) => {
     setInputText((prev) => ({ ...prev, [column]: value }));
   };
 
-  const addTask = async (column) => {
-    const title = (inputText[column] || "").trim();
-    if (!title) {
+  const addTask = async (column, taskTypeOverride = null) => {
+    if (!canCreateTasks) {
+      setRestrictionMessage("You do not have permission to create tasks.");
       return;
     }
 
+    if (column !== "todo") {
+      setRestrictionMessage("Tasks can be created only in To Do.");
+      return;
+    }
+
+    const title = (inputText[column] || "").trim();
+    if (!title || taskActionBusy) {
+      return;
+    }
+
+    const normalizedTaskType = column === "todo"
+      ? normalizeTaskType(taskTypeOverride || todoTaskType)
+      : "weekly";
+    const autoDueDate = getAutoDueDate(normalizedTaskType);
+
+    setTaskActionBusy(true);
     try {
       const response = await api.post("/tasks", {
         title,
         status: column,
         description: "",
-        dueDate: null,
+        dueDate: autoDueDate,
+        taskType: normalizedTaskType,
         assignee: "",
         comments: [],
-        approvalStatus: column === "REVIEW" ? "requested" : "not-requested",
-        mentorNote: currentUserRole === "MENTOR" ? "Review when ready." : "",
+        approvalStatus: column === "submitted" ? "requested" : "not-requested",
+        mentorNote: "",
         order: tasksByColumn[column].length,
         projectId,
       });
@@ -459,14 +514,17 @@ export default function Board({
       setTasks((prev) => [...prev, normalizeTask(response.data)]);
       setInputText((prev) => ({ ...prev, [column]: "" }));
       setInputVisible((prev) => ({ ...prev, [column]: false }));
-    } catch {
-      setRestrictionMessage("Could not create task. Check backend connection.");
+      setRestrictionMessage("");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not create task. Check backend connection."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
   const handleKeyDown = (event, column) => {
     if (event.key === "Enter") {
-      addTask(column);
+      addTask(column, column === "todo" ? todoTaskType : "weekly");
     }
   };
 
@@ -493,9 +551,10 @@ export default function Board({
 
       setTaskComments(Array.isArray(commentsResponse.data) ? commentsResponse.data : []);
       setTaskAttachments(Array.isArray(attachmentsResponse.data) ? attachmentsResponse.data : []);
-    } catch {
+    } catch (error) {
       setTaskComments(fallbackTask?.comments || []);
       setTaskAttachments([]);
+      setRestrictionMessage(getApiErrorMessage(error, "Could not load task details."));
     } finally {
       setTaskModalLoading(false);
     }
@@ -514,7 +573,7 @@ export default function Board({
       dueDate: task.dueDate || "",
       assignee: task.assignee || "",
       mentorNote: task.mentorNote || "",
-      status: task.status || "TASK",
+      status: task.status || "todo",
     });
 
     await refreshTaskDetails(task.id, task);
@@ -527,11 +586,16 @@ export default function Board({
     setTaskComments([]);
     setTaskAttachments([]);
     setTaskModalLoading(false);
-    setTaskDraft({ title: "", description: "", dueDate: "", assignee: "", mentorNote: "", status: "TASK" });
+    setTaskDraft({ title: "", description: "", dueDate: "", assignee: "", mentorNote: "", status: "todo" });
   };
 
   const startEditingTask = () => {
     if (!selectedTask) {
+      return;
+    }
+
+    if (!canManageTaskBoard) {
+      setRestrictionMessage("Only manager or team lead can edit tasks.");
       return;
     }
 
@@ -542,12 +606,12 @@ export default function Board({
       dueDate: selectedTask.dueDate || "",
       assignee: selectedTask.assignee || "",
       mentorNote: selectedTask.mentorNote || "",
-      status: selectedTask.status || "TASK",
+      status: selectedTask.status || "todo",
     });
   };
 
   const saveTaskChanges = async () => {
-    if (!editingTask) {
+    if (!editingTask || taskActionBusy) {
       return;
     }
 
@@ -557,6 +621,7 @@ export default function Board({
       return;
     }
 
+    setTaskActionBusy(true);
     try {
       const response = await api.put(`/tasks/${editingTask.id}`, {
         title: nextTitle,
@@ -581,21 +646,33 @@ export default function Board({
         dueDate: response.data.dueDate || "",
         assignee: response.data.assignee || "",
         mentorNote: response.data.mentorNote || "",
-        status: response.data.status || "TASK",
+        status: response.data.status || "todo",
       });
       setRestrictionMessage("");
       setEditingTaskId(null);
       await refreshTaskDetails(response.data.id, response.data);
-    } catch {
-      setRestrictionMessage("Could not save task changes.");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not save task changes."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
   const requestDeleteTask = (taskId) => {
+    if (!isManager) {
+      setRestrictionMessage("Only manager can delete tasks.");
+      return;
+    }
+
     setDeleteConfirmTaskId(taskId);
   };
 
   const deleteTask = async (taskId) => {
+    if (taskActionBusy) {
+      return;
+    }
+
+    setTaskActionBusy(true);
     try {
       await api.delete(`/tasks/${taskId}`);
       setTasks((prev) => prev.filter((task) => String(task.id) !== String(taskId)));
@@ -603,13 +680,15 @@ export default function Board({
         closeTaskModal();
       }
       setDeleteConfirmTaskId(null);
-    } catch {
-      setRestrictionMessage("Could not delete task.");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not delete task."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
   const addComment = async (taskId) => {
-    if (!taskId) {
+    if (!taskId || taskActionBusy) {
       return;
     }
 
@@ -618,6 +697,7 @@ export default function Board({
       return;
     }
 
+    setTaskActionBusy(true);
     try {
       await api.post(`/tasks/${selectedTask?.id}/comments`, {
         comment,
@@ -625,16 +705,19 @@ export default function Board({
 
       await refreshTaskDetails(selectedTask?.id);
       setRestrictionMessage("");
-    } catch {
-      setRestrictionMessage("Could not add comment.");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not add comment."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
   const uploadAttachment = async (file) => {
-    if (!selectedTask || !file) {
+    if (!selectedTask || !file || taskActionBusy) {
       return;
     }
 
+    setTaskActionBusy(true);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -647,15 +730,32 @@ export default function Board({
 
       await refreshTaskDetails(selectedTask.id);
       setRestrictionMessage("");
-    } catch {
-      setRestrictionMessage("Could not upload attachment.");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not upload attachment."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
-  const requestMentorReview = async (taskId) => {
+  const submitTask = async (taskId) => {
+    const task = tasks.find((entry) => String(entry.id) === String(taskId));
+    if (!task) {
+      return;
+    }
+
+    if (!(isStudent && isOwnTask(task))) {
+      setRestrictionMessage("Students can submit only their own tasks.");
+      return;
+    }
+
+    if (taskActionBusy) {
+      return;
+    }
+
+    setTaskActionBusy(true);
     try {
       const response = await api.put(`/tasks/${taskId}`, {
-        status: "REVIEW",
+        status: "submitted",
         approvalStatus: "requested",
       });
 
@@ -666,25 +766,33 @@ export default function Board({
             : task
         )
       );
-      setRestrictionMessage("Task sent for mentor review.");
+      setRestrictionMessage("Task submitted for review.");
       if (selectedTaskId && String(selectedTaskId) === String(taskId)) {
         await refreshTaskDetails(taskId, response.data);
       }
-    } catch {
-      setRestrictionMessage("Could not request mentor review.");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not submit task for review."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
   const approveTask = async (taskId) => {
-    if (currentUserRole !== "MENTOR") {
-      setRestrictionMessage("Only mentor can approve tasks.");
+    if (!canReviewTasks) {
+      setRestrictionMessage("Only mentor or manager can approve tasks.");
       return;
     }
 
+    if (taskActionBusy) {
+      return;
+    }
+
+    setTaskActionBusy(true);
     try {
       const response = await api.put(`/tasks/${taskId}`, {
-        status: "COMPLETED",
+        status: "completed",
         approvalStatus: "approved",
+        rejectionReason: "",
       });
 
       setTasks((prev) =>
@@ -694,20 +802,39 @@ export default function Board({
             : task
         )
       );
-      setRestrictionMessage("Task approved and completed.");
+      setRestrictionMessage("Task approved.");
       if (selectedTaskId && String(selectedTaskId) === String(taskId)) {
         await refreshTaskDetails(taskId, response.data);
       }
-    } catch {
-      setRestrictionMessage("Could not approve task.");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not approve task."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
-  const moveToReview = async (taskId) => {
+  const rejectTask = async (taskId) => {
+    if (!canReviewTasks) {
+      setRestrictionMessage("Only mentor or manager can reject tasks.");
+      return;
+    }
+
+    if (taskActionBusy) {
+      return;
+    }
+
+    const reason = window.prompt("Enter rejection reason") || "";
+    if (!reason.trim()) {
+      setRestrictionMessage("Rejection reason is required.");
+      return;
+    }
+
+    setTaskActionBusy(true);
     try {
       const response = await api.put(`/tasks/${taskId}`, {
-        status: "REVIEW",
-        approvalStatus: "requested",
+        status: "rejected",
+        approvalStatus: "rejected",
+        rejectionReason: reason.trim(),
       });
 
       setTasks((prev) =>
@@ -717,12 +844,14 @@ export default function Board({
             : task
         )
       );
-      setRestrictionMessage("Task moved to mentor review.");
+      setRestrictionMessage("Task rejected.");
       if (selectedTaskId && String(selectedTaskId) === String(taskId)) {
         await refreshTaskDetails(taskId, response.data);
       }
-    } catch {
-      setRestrictionMessage("Could not move task to review.");
+    } catch (error) {
+      setRestrictionMessage(getApiErrorMessage(error, "Could not reject task."));
+    } finally {
+      setTaskActionBusy(false);
     }
   };
 
@@ -745,8 +874,26 @@ export default function Board({
     const sourceColumn = activeTask.status;
     const destinationColumn = overTask?.status || (columns.includes(String(overId)) ? String(overId) : sourceColumn);
 
-    if (destinationColumn === "COMPLETED" && currentUserRole !== "MENTOR") {
-      setRestrictionMessage("Only mentor can move tasks to Completed.");
+    if (!canManageTaskBoard) {
+      setRestrictionMessage("Only manager or team lead can move tasks.");
+      return null;
+    }
+
+    if (normalizedRole === "mentor") {
+      const mentorAllowedMove = sourceColumn === "submitted" && ["submitted", "completed", "rejected"].includes(destinationColumn);
+      if (!mentorAllowedMove) {
+        setRestrictionMessage("Mentor can only review submitted tasks (approve/reject).");
+        return null;
+      }
+    }
+
+    if (normalizedRole === "team_lead" && (destinationColumn === "rejected" || destinationColumn === "completed")) {
+      setRestrictionMessage("Team lead cannot move tasks to rejected or completed.");
+      return null;
+    }
+
+    if ((destinationColumn === "rejected" || destinationColumn === "completed") && !isManager) {
+      setRestrictionMessage("Only manager can move tasks to rejected or completed.");
       return null;
     }
 
@@ -808,13 +955,14 @@ export default function Board({
       ...activeTask,
       status: destinationColumn,
       approvalStatus:
-        destinationColumn === "REVIEW"
+        destinationColumn === "submitted"
           ? "requested"
-          : destinationColumn === "COMPLETED"
-            ? currentUserRole === "MENTOR"
-              ? "approved"
+          : destinationColumn === "rejected" || destinationColumn === "completed"
+            ? canReviewTasks
+              ? (destinationColumn === "completed" ? "approved" : "rejected")
               : activeTask.approvalStatus
             : activeTask.approvalStatus,
+      rejectionReason: destinationColumn === "rejected" ? (activeTask.rejectionReason || "Rejected by reviewer") : "",
       updatedAt: now,
     });
 
@@ -886,30 +1034,46 @@ export default function Board({
           approvalStatus: task.approvalStatus,
         })),
       })
-      .catch(() => {
-        setRestrictionMessage("Task moved locally, but failed to sync order to backend.");
+      .catch((error) => {
+        setRestrictionMessage(getApiErrorMessage(error, "Task moved locally, but failed to sync order to backend."));
       });
   };
 
   const renderTaskBadge = (task) => {
-    if (task.status === "REVIEW" && task.approvalStatus !== "approved") {
+    if (task.status === "submitted" && task.approvalStatus !== "approved") {
       return (
-        <span className="text-[10px] uppercase tracking-wide bg-orange/15 text-orange px-2 py-1 rounded-full">
+        <span className="rounded-full bg-orange/15 px-2 py-1 text-[10px] uppercase tracking-wide text-orange-700">
           Mentor review pending
         </span>
       );
     }
 
-    if (task.status === "COMPLETED") {
+    if (task.status === "approved") {
       return (
-        <span className="text-[10px] uppercase tracking-wide bg-green/15 text-green px-2 py-1 rounded-full">
+        <span className="rounded-full bg-green-100 px-2 py-1 text-[10px] uppercase tracking-wide text-green-700">
+          Approved
+        </span>
+      );
+    }
+
+    if (task.status === "completed") {
+      return (
+        <span className="rounded-full bg-cyan-100 px-2 py-1 text-[10px] uppercase tracking-wide text-cyan-700">
           Completed
         </span>
       );
     }
 
+    if (task.status === "rejected") {
+      return (
+        <span className="rounded-full bg-rose-100 px-2 py-1 text-[10px] uppercase tracking-wide text-rose-700">
+          Rejected
+        </span>
+      );
+    }
+
     return (
-      <span className="text-[10px] uppercase tracking-wide bg-slate-100 text-slate-500 px-2 py-1 rounded-full">
+      <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
         In flow
       </span>
     );
@@ -917,43 +1081,64 @@ export default function Board({
 
   return (
     <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <section className={`relative h-full overflow-x-auto rounded-[24px] p-4 sm:p-6 ${boardTheme.canvas}`}>
+      <section className="app-section relative h-full overflow-hidden rounded-[24px] p-4 sm:p-6">
         <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[24px]">
-          <div className="absolute -left-12 -top-12 h-44 w-44 rounded-full bg-white/25 blur-2xl" />
-          <div className="absolute -right-10 bottom-0 h-52 w-52 rounded-full bg-white/20 blur-2xl" />
+          <div className="absolute -left-12 -top-12 h-44 w-44 rounded-full bg-blue-200/35 blur-2xl" />
+          <div className="absolute -right-10 bottom-0 h-52 w-52 rounded-full bg-teal-200/30 blur-2xl" />
         </div>
         <div className="relative space-y-4">
-          <div className={`flex flex-col gap-3 rounded-2xl border px-4 py-4 shadow-sm backdrop-blur-sm lg:flex-row lg:items-center lg:justify-between ${boardTheme.panel}`}>
+          <div className="glass-card flex flex-col gap-3 rounded-2xl px-4 py-4 shadow-sm backdrop-blur-sm lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Project board</p>
+              <p className="label-caps">Project board</p>
               <p className="mt-1 text-sm text-slate-600">
-                Trello-style execution board with clear lanes, fast drag-drop, and clean card hierarchy.
+                Execution board where manager and team lead assign and track work.
+              </p>
+              <p className="mt-2 inline-flex items-center rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
+                Tip: Drag flow is To Do {">"} Submitted {">"} Completed.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <span className={`inline-flex w-fit items-center rounded-full border px-3 py-1 text-xs font-semibold ${boardTheme.roleBadge}`}>
                 Role: {currentUserRole}
+                <span className="ml-1.5">
+                  <InfoTip text="Manager and team lead manage tasks. Students submit reports. Mentor approves first, then manager finalizes." />
+                </span>
               </span>
               <button
                 type="button"
-                onClick={() => toggleInput("TASK")}
-                className="rounded-full border border-white/40 bg-white/70 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-white"
+                onClick={() => openTodoInputForType("daily")}
+                className="glass-button-primary rounded-full px-3 py-1 text-xs font-semibold text-white"
+                disabled={!canCreateTasks}
               >
-                + Quick Task
+                {canCreateTasks ? "+ Daily Task" : "No create access"}
               </button>
+              <button
+                type="button"
+                onClick={() => openTodoInputForType("weekly")}
+                className="glass-button-primary rounded-full px-3 py-1 text-xs font-semibold text-white"
+                disabled={!canCreateTasks}
+              >
+                {canCreateTasks ? "+ Weekly Task" : "No create access"}
+              </button>
+              <InfoTip text="Manager and team lead manage tasks; students submit reports; mentor approval and manager finalization happen on Reports." />
             </div>
           </div>
 
           {restrictionMessage && (
-            <div className="rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800 shadow-sm">
+            <div className="glass-card rounded-2xl px-4 py-3 text-sm text-orange-800 shadow-sm">
               {restrictionMessage}
             </div>
           )}
 
           {loadingTasks && (
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+            <div className="glass-card rounded-2xl px-4 py-3 text-sm text-slate-600 shadow-sm">
               Loading tasks...
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <SkeletonCard />
+                <SkeletonCard />
+                <SkeletonCard />
+              </div>
             </div>
           )}
 
@@ -978,16 +1163,18 @@ export default function Board({
             }}
           />
 
-          <div className="relative overflow-hidden rounded-[26px] border border-white/40 bg-[linear-gradient(160deg,rgba(255,255,255,0.5),rgba(255,255,255,0.14))] p-4 shadow-[0_24px_60px_rgba(15,23,42,0.16)]">
-            <div className="pointer-events-none absolute -right-10 -top-24 h-72 w-72 rounded-full border border-white/35 bg-white/10" />
-            <div className="pointer-events-none absolute -bottom-28 right-20 h-80 w-80 rounded-full border border-white/25" />
+          <div className="glass-panel relative overflow-hidden rounded-[26px] p-4 shadow-[0_24px_60px_rgba(15,23,42,0.12)] backdrop-blur-md">
+            <div className="pointer-events-none absolute -right-10 -top-24 h-72 w-72 rounded-full border border-white/30 bg-white/10" />
+            <div className="pointer-events-none absolute -bottom-28 right-20 h-80 w-80 rounded-full border border-white/20" />
 
-            <div className="relative flex min-w-max gap-4 pb-2">
+            <div className="relative flex gap-4 overflow-x-auto pb-4">
               {columns.map((col) => (
                 <BoardColumn
                   key={col}
                   column={col}
                   columnTasks={tasksByColumn[col]}
+                  canCreateTask={canCreateTasks && col === "todo"}
+                  taskType={col === "todo" ? todoTaskType : "weekly"}
                   boardTheme={boardTheme}
                   inputVisible={inputVisible}
                   inputText={inputText}
@@ -1001,8 +1188,9 @@ export default function Board({
             </div>
 
             {!loadingTasks && filteredTasks.length === 0 && (
-              <div className="relative mt-4 rounded-2xl border border-dashed border-slate-300 bg-white/85 px-4 py-6 text-center text-sm text-slate-500">
-                No tasks match these filters. Try clearing one or more filters.
+              <div className="relative mt-4 rounded-2xl border border-dashed border-white/45 bg-white/72 px-4 py-6 text-center text-sm text-slate-500 backdrop-blur-sm">
+                <p className="text-base font-semibold text-slate-700">No tasks yet</p>
+                <p className="mt-2 text-sm text-slate-500">Start by adding your first task.</p>
               </div>
             )}
           </div>
@@ -1010,40 +1198,46 @@ export default function Board({
 
         <button
           type="button"
-          onClick={() => toggleInput("TASK")}
-          className="fixed bottom-6 right-6 z-40 rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(15,23,42,0.28)] transition hover:-translate-y-0.5 hover:bg-slate-700"
+          onClick={() => openTodoInputForType("weekly")}
+          className="glass-button-primary fixed bottom-6 right-6 z-40 rounded-full px-5 py-3 text-sm font-semibold"
+          disabled={!canCreateTasks}
         >
-          + Add Task
+          {canCreateTasks ? "+ Add Task" : "No create access"}
         </button>
 
-        {selectedTask && (
-          <TaskModal
-            task={{
-              ...selectedTask,
-              comments: taskComments,
-              attachments: taskAttachments,
-            }}
-            loading={taskModalLoading}
-            currentUserRole={currentUserRole}
-            isEditing={Boolean(editingTask)}
-            taskDraft={taskDraft}
-            setTaskDraft={setTaskDraft}
-            comments={taskComments}
-            attachments={taskAttachments}
-            onClose={closeTaskModal}
-            onStartEdit={startEditingTask}
-            onSave={saveTaskChanges}
-            onDelete={requestDeleteTask}
-            onRequestReview={requestMentorReview}
-            onApprove={approveTask}
-            onAddComment={addComment}
-            onUploadAttachment={uploadAttachment}
-          />
-        )}
+        <AnimatePresence mode="wait">
+          {selectedTask && (
+            <TaskModal
+              task={{
+                ...selectedTask,
+                comments: taskComments,
+                attachments: taskAttachments,
+              }}
+              loading={taskModalLoading}
+              currentUserRole={currentUserRole}
+              isEditing={Boolean(editingTask)}
+              taskDraft={taskDraft}
+              setTaskDraft={setTaskDraft}
+              comments={taskComments}
+              attachments={taskAttachments}
+              onClose={closeTaskModal}
+              onStartEdit={startEditingTask}
+              onSave={saveTaskChanges}
+              onDelete={requestDeleteTask}
+              onSubmitTask={submitTask}
+              onApprove={approveTask}
+              onReject={rejectTask}
+              onAddComment={addComment}
+              onUploadAttachment={uploadAttachment}
+              actionBusy={taskActionBusy}
+              canEditTask={canManageTaskBoard}
+            />
+          )}
+        </AnimatePresence>
 
         {deleteConfirmTask && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 px-4">
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-sm">
+            <div className="glass-panel w-full max-w-md rounded-2xl p-6 shadow-2xl">
               <h3 className="text-lg font-semibold text-slate-900">Delete task?</h3>
               <p className="mt-2 text-sm text-slate-600">
                 This will permanently remove “{deleteConfirmTask.title}” from the board.
@@ -1053,14 +1247,14 @@ export default function Board({
                 <button
                   type="button"
                   onClick={() => setDeleteConfirmTaskId(null)}
-                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  className="glass-button-secondary rounded-md px-4 py-2 text-sm font-medium"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={() => deleteTask(deleteConfirmTask.id)}
-                  className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                  className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700"
                 >
                   Delete
                 </button>

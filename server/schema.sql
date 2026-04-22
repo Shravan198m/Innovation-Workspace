@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   id SERIAL PRIMARY KEY,
   title TEXT NOT NULL,
   status TEXT NOT NULL,
+  task_type TEXT DEFAULT 'weekly',
+  created_by TEXT DEFAULT '',
   description TEXT DEFAULT '',
   due_date DATE,
   assignee TEXT DEFAULT '',
@@ -195,7 +197,7 @@ BEGIN
   ) THEN
     ALTER TABLE users
       ADD CONSTRAINT chk_users_role
-      CHECK (role IN ('MENTOR', 'STUDENT', 'ADMIN')) NOT VALID;
+      CHECK (role IN ('MENTOR', 'STUDENT', 'ADMIN', 'TEAM_LEAD')) NOT VALID;
   END IF;
 
   IF NOT EXISTS (
@@ -206,7 +208,7 @@ BEGIN
   ) THEN
     ALTER TABLE tasks
       ADD CONSTRAINT chk_tasks_status
-      CHECK (status IN ('TASK', 'IN PROGRESS', 'IN_PROGRESS', 'REVIEW', 'COMPLETED')) NOT VALID;
+      CHECK (status IN ('TASK', 'REVIEW', 'COMPLETED')) NOT VALID;
   END IF;
 
   IF NOT EXISTS (
@@ -217,7 +219,7 @@ BEGIN
   ) THEN
     ALTER TABLE tasks
       ADD CONSTRAINT chk_tasks_approval_status
-      CHECK (approval_status IN ('not-requested', 'requested', 'approved', 'rejected', 'PENDING', 'APPROVED', 'REJECTED')) NOT VALID;
+      CHECK (approval_status IN ('not-requested', 'requested', 'mentor-approved', 'approved', 'rejected', 'PENDING', 'APPROVED', 'REJECTED')) NOT VALID;
   END IF;
 
   IF NOT EXISTS (
@@ -239,7 +241,7 @@ BEGIN
   ) THEN
     ALTER TABLE reports
       ADD CONSTRAINT chk_reports_status
-      CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')) NOT VALID;
+      CHECK (status IN ('SUBMITTED', 'MENTOR_APPROVED', 'COMPLETED', 'REJECTED')) NOT VALID;
   END IF;
 
   IF NOT EXISTS (

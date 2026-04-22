@@ -1,25 +1,28 @@
-export default function ActivityPanel({ activity = [], loading = false }) {
+export default function ActivityPanel({ activity = [], loading = false, className = "", compact = false }) {
   return (
-    <aside className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)]">
+    <aside className={`glass-card flex h-full min-h-0 flex-col rounded-[22px] p-4 ${className}`}>
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Activity</h3>
-        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+        <h3 className={`font-semibold uppercase text-slate-500 ${compact ? "text-xs tracking-[0.14em]" : "text-sm tracking-[0.2em]"}`}>
+          Activity
+        </h3>
+        <span className="glass-pill rounded-full px-2.5 py-1 text-xs font-semibold">
           {activity.length}
         </span>
       </div>
 
-      <div className="max-h-[560px] space-y-2 overflow-auto pr-1">
+      <div className="min-h-0 flex-1 space-y-2 overflow-auto pr-1">
         {loading ? (
-          <p className="rounded-xl border border-dashed border-slate-300 px-3 py-3 text-sm text-slate-500">
+          <p className="glass-surface rounded-xl border-dashed px-3 py-3 text-sm text-slate-500">
             Loading activity...
           </p>
         ) : activity.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-slate-300 px-3 py-3 text-sm text-slate-500">
-            No activity yet.
-          </p>
+          <div className="glass-surface rounded-xl border-dashed px-4 py-5 text-center text-sm text-slate-500">
+            <p className="text-base font-semibold text-slate-700">No activity yet</p>
+            <p className="mt-1">Start by adding your first task.</p>
+          </div>
         ) : (
           activity.slice(0, 50).map((entry) => (
-            <article key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <article key={entry.id} className="glass-surface rounded-xl p-3">
               <p className="text-sm text-slate-800">
                 <span className="font-semibold text-slate-900">{entry.userName}</span> {entry.action}
               </p>

@@ -1,8 +1,53 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import api from "../services/api";
+import InfoTip from "../components/InfoTip";
+import { getApiErrorMessage } from "../services/apiError";
+import Card from "../components/ui/Card";
+import { canEditBudget } from "../utils/roles";
 
 const STATUS_OPTIONS = ["PENDING", "APPROVED", "PAID"];
+const ROW_SIZE_OPTIONS = [
+  { value: "compact", label: "Compact", rowHeight: 36, cellPadding: "py-1.5" },
+  { value: "normal", label: "Normal", rowHeight: 46, cellPadding: "py-2" },
+  { value: "spacious", label: "Spacious", rowHeight: 58, cellPadding: "py-3" },
+];
+const ROW_MIN_HEIGHT = 34;
+const COLUMN_MIN_WIDTH = 72;
+const DEFAULT_COLUMN_WIDTHS = [
+  72, 240, 80,
+  170, 120,
+  170, 120,
+  170, 120,
+  220, 130,
+  150, 130,
+  130, 140, 140,
+  130, 120,
+  90, 120, 140,
+  130,
+];
+const CELL_FIELDS = [
+  "itemName",
+  "qty",
+  "vendor1Name",
+  "vendor1Amount",
+  "vendor2Name",
+  "vendor2Amount",
+  "vendor3Name",
+  "vendor3Amount",
+  "finalVendorDetails",
+  "finalAmount",
+  "remarks",
+  "poNumber",
+  "utr",
+  "transactionDate",
+  "transactionAmount",
+  "invoice",
+  "status",
+  "invoiceQty",
+  "invoiceDate",
+  "certifiedBy",
+];
 
 const EMPTY_ROW = {
   itemName: "",
@@ -140,14 +185,102 @@ function formatCurrency(value) {
   return `₹${parsed.toLocaleString("en-IN")}`;
 }
 
-export default function BudgetTab({ projectId, currentUserRole, projectAccent = "from-cyan-700 to-teal-500" }) {
+export default function BudgetTab({ projectId, currentUserRole }) {
+  const canManageBudget = canEditBudget(currentUserRole);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isTableFullScreen, setIsTableFullScreen] = useState(false);
+  const [rowHeights, setRowHeights] = useState({});
+  const [columnWidths, setColumnWidths] = useState(DEFAULT_COLUMN_WIDTHS);
   const [savingRowIds, setSavingRowIds] = useState([]);
   const [selectedCell, setSelectedCell] = useState({ rowId: null, field: null });
   const [message, setMessage] = useState("");
   const itemsRef = useRef([]);
   const cellRefs = useRef({});
+  const rowResizeRef = useRef(null);
+  const colResizeRef = useRef(null);
+
+  const rowSizeConfig = ROW_SIZE_OPTIONS[1];
+
+  function getRowHeight(rowId) {
+    return rowHeights[rowId] || rowSizeConfig.rowHeight;
+  }
+
+  function startRowResize(event, rowId) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    rowResizeRef.current = {
+      rowId,
+      startY: event.clientY,
+      startHeight: getRowHeight(rowId),
+    };
+
+    const handlePointerMove = (moveEvent) => {
+      const activeResize = rowResizeRef.current;
+      if (!activeResize || activeResize.rowId !== rowId) {
+        return;
+      }
+
+      const nextHeight = Math.max(ROW_MIN_HEIGHT, activeResize.startHeight + (moveEvent.clientY - activeResize.startY));
+      setRowHeights((prev) => ({ ...prev, [rowId]: nextHeight }));
+    };
+
+    const handlePointerUp = () => {
+      rowResizeRef.current = null;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
+
+  function startColumnResize(event, columnIndex) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    colResizeRef.current = {
+      columnIndex,
+      startX: event.clientX,
+      startWidth: columnWidths[columnIndex] || DEFAULT_COLUMN_WIDTHS[columnIndex] || COLUMN_MIN_WIDTH,
+    };
+
+    const handlePointerMove = (moveEvent) => {
+      const activeResize = colResizeRef.current;
+      if (!activeResize || activeResize.columnIndex !== columnIndex) {
+        return;
+      }
+
+      const nextWidth = Math.max(COLUMN_MIN_WIDTH, activeResize.startWidth + (moveEvent.clientX - activeResize.startX));
+      setColumnWidths((prev) => {
+        const next = [...prev];
+        next[columnIndex] = nextWidth;
+        return next;
+      });
+    };
+
+    const handlePointerUp = () => {
+      colResizeRef.current = null;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
+
+  const renderColumnResizeHandle = (columnIndex) => (
+    <button
+      type="button"
+      aria-label="Resize column"
+      title="Drag column border to resize"
+      onPointerDown={(event) => startColumnResize(event, columnIndex)}
+      className="group absolute -right-1 top-0 z-20 h-full w-2 cursor-col-resize border-0 bg-transparent p-0"
+    >
+      <span className="absolute left-1/2 top-1/2 h-6 w-px -translate-x-1/2 -translate-y-1/2 bg-slate-300 transition group-hover:bg-sky-500" />
+    </button>
+  );
 
   useEffect(() => {
     itemsRef.current = items;
@@ -156,6 +289,32 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
   useEffect(() => {
     fetchBudgetData();
   }, [projectId]);
+
+  useEffect(() => {
+    const handleEscapeKey = (event) => {
+      if (event.key === "Escape") {
+        setIsTableFullScreen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleEscapeKey);
+
+    return () => {
+      document.removeEventListener("keydown", handleEscapeKey);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTableFullScreen) {
+      document.body.style.overflow = "";
+      return;
+    }
+
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isTableFullScreen]);
 
   const summary = useMemo(() => {
     const rows = items.filter((row) => !row.isDraft);
@@ -176,10 +335,10 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
       const response = await api.get(`/budgets/${projectId}`);
       const rows = Array.isArray(response.data) ? response.data.map(normalizeRow) : [];
       setItems(rows.length > 0 ? rows : [createDraftRow()]);
+      setMessage("");
     } catch (error) {
-      console.error("Failed to fetch budget data", error);
       setItems([createDraftRow()]);
-      setMessage("Working offline for now. Start the backend to sync rows.");
+      setMessage(getApiErrorMessage(error, "Working offline for now. Start the backend to sync rows."));
     } finally {
       setLoading(false);
     }
@@ -207,7 +366,22 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
     }
   }
 
+  function focusByGridPosition(rowIndex, columnIndex) {
+    const boundedColumn = Math.max(0, Math.min(CELL_FIELDS.length - 1, columnIndex));
+    const row = items[rowIndex];
+
+    if (!row) {
+      return;
+    }
+
+    focusCell(row.id, CELL_FIELDS[boundedColumn]);
+  }
+
   async function persistRow(rowId, options = { overrides: {} }) {
+    if (!canManageBudget) {
+      return;
+    }
+
     const row = itemsRef.current.find((entry) => entry.id === rowId);
 
     if (!row) {
@@ -235,8 +409,7 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
       window.clearTimeout(window.__budgetMessageTimer);
       window.__budgetMessageTimer = window.setTimeout(() => setMessage(""), 1200);
     } catch (error) {
-      console.error("Failed to save budget row", error);
-      setMessage("Save failed. Check backend and try again.");
+      setMessage(getApiErrorMessage(error, "Save failed. Check backend and try again."));
     } finally {
       markSaving(false);
     }
@@ -247,6 +420,10 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
   }
 
   function handleCellBlur(rowId, field) {
+    if (!canManageBudget) {
+      return;
+    }
+
     if (field === "status") {
       return;
     }
@@ -255,19 +432,44 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
   }
 
   function handleCellKeyDown(event, rowIndex, field) {
-    if (event.key !== "Enter") {
+    const columnIndex = CELL_FIELDS.indexOf(field);
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      focusByGridPosition(rowIndex, columnIndex + 1);
       return;
     }
 
-    event.preventDefault();
-
-    const nextRow = items[rowIndex + 1];
-    if (nextRow) {
-      focusCell(nextRow.id, field);
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      focusByGridPosition(rowIndex, columnIndex - 1);
       return;
     }
 
-    addDraftRow(field);
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusByGridPosition(Math.max(0, rowIndex - 1), columnIndex);
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const nextIndex = Math.min(items.length - 1, rowIndex + 1);
+      focusByGridPosition(nextIndex, columnIndex);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+
+      const nextRow = items[rowIndex + 1];
+      if (nextRow) {
+        focusCell(nextRow.id, field);
+        return;
+      }
+
+      addDraftRow(field);
+    }
   }
 
   function addDraftRow(focusField = "itemName") {
@@ -277,6 +479,10 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
   }
 
   async function deleteRow(rowId) {
+    if (!canManageBudget) {
+      return;
+    }
+
     const row = itemsRef.current.find((entry) => entry.id === rowId);
 
     if (!row) {
@@ -285,10 +491,6 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
 
     if (row.isDraft) {
       setItems((prev) => prev.filter((entry) => entry.id !== rowId));
-      return;
-    }
-
-    if (!window.confirm("Delete this budget row?")) {
       return;
     }
 
@@ -304,6 +506,10 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
   }
 
   function autoFillAllRows() {
+    if (!canManageBudget) {
+      return;
+    }
+
     setItems((prev) =>
       prev.map((row) => {
         if (row.isDraft) {
@@ -333,11 +539,12 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
       ref={(element) => registerCellRef(row.id, field, element)}
       type={type}
       value={row[field]}
+      disabled={!canManageBudget}
       onFocus={() => setSelectedCell({ rowId: row.id, field })}
       onChange={(event) => handleCellChange(row.id, field, event.target.value)}
       onBlur={() => handleCellBlur(row.id, field)}
       onKeyDown={(event) => handleCellKeyDown(event, rowIndex, field)}
-      className={`w-full border-0 bg-transparent px-2 py-2 text-sm outline-none focus:bg-blue-50 ${extraClasses}`}
+      className={`w-full border-0 bg-transparent px-2 text-sm outline-none focus:bg-white/90 ${rowSizeConfig.cellPadding} ${extraClasses}`}
     />
   );
 
@@ -410,15 +617,19 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
     window.setTimeout(() => setMessage(""), 2000);
   };
 
+  const toggleTableFullScreen = () => {
+    setIsTableFullScreen((prev) => !prev);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
-        <div className={`bg-gradient-to-r ${projectAccent} px-6 py-6 text-white sm:px-8`}>
+      <Card className="overflow-hidden rounded-[28px] p-0">
+        <div className="bg-[linear-gradient(135deg,rgba(37,99,235,0.18)_0%,rgba(14,165,164,0.14)_100%)] px-6 py-6 text-slate-900 sm:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/80">Budget control</p>
-          <h2 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">Excel-Level Budget Module</h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-white/80">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Budget control</p>
+          <h2 className="heading-lg heading-project mt-2">Budget Finalization Module</h2>
+          <p className="text-muted mt-3 max-w-2xl text-sm leading-6">
             Spreadsheet-style vendor comparison, final selection, transactions, and invoice tracking.
           </p>
         </div>
@@ -427,28 +638,37 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
           <button
             type="button"
             onClick={() => addDraftRow()}
-            className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-cyan-50"
+            disabled={!canManageBudget}
+            className="glass-button-primary rounded-2xl px-4 py-2 text-sm font-semibold"
           >
             + Add Row
           </button>
           <button
             type="button"
             onClick={autoFillAllRows}
-            className="rounded-2xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20"
+            disabled={!canManageBudget}
+            className="glass-button-secondary rounded-2xl px-4 py-2 text-sm font-semibold"
           >
             Auto Fill Final Vendor
           </button>
           <button
             type="button"
             onClick={exportToExcel}
-            className="rounded-2xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500/30"
+            className="glass-button-secondary rounded-2xl px-4 py-2 text-sm font-semibold"
           >
             Download Excel
           </button>
           <button
             type="button"
+            onClick={toggleTableFullScreen}
+            className="glass-button-secondary rounded-2xl px-4 py-2 text-sm font-semibold"
+          >
+            {isTableFullScreen ? "Close Full Screen" : "Full Screen Table"}
+          </button>
+          <button
+            type="button"
             onClick={fetchBudgetData}
-            className="rounded-2xl border border-white/20 bg-transparent px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+            className="glass-button-secondary rounded-2xl px-4 py-2 text-sm font-semibold"
           >
             Refresh
           </button>
@@ -456,80 +676,137 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
       </div>
         </div>
 
-        <div className="grid gap-3 border-t border-slate-200 bg-slate-50 px-6 py-5 md:grid-cols-4 sm:px-8">
-          <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 border-t border-white/45 bg-white/35 px-6 py-5 md:grid-cols-4 sm:px-8 backdrop-blur-md">
+          <Card className="rounded-2xl p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Rows</p>
             <p className="mt-2 text-3xl font-semibold text-slate-900">{summary.totalRows}</p>
-          </article>
-          <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          </Card>
+          <Card className="rounded-2xl p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Total Amount</p>
             <p className="mt-2 text-3xl font-semibold text-slate-900">{formatCurrency(summary.totalAmount)}</p>
-          </article>
-          <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          </Card>
+          <Card className="rounded-2xl p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Approved / Paid</p>
             <p className="mt-2 text-3xl font-semibold text-slate-900">
               {summary.approvedCount} / {summary.paidCount}
             </p>
-          </article>
-          <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          </Card>
+          <Card className="rounded-2xl p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Pending</p>
             <p className="mt-2 text-3xl font-semibold text-slate-900">{summary.pendingCount}</p>
-          </article>
+          </Card>
         </div>
-      </div>
+      </Card>
 
-      {message && <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">{message}</div>}
+      {message && <div className="glass-card rounded-xl px-4 py-3 text-sm text-blue-700">{message}</div>}
 
       {loading ? (
-        <div className="rounded-[24px] border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
+        <Card className="rounded-[24px] p-8 text-center text-slate-500">
           Loading spreadsheet...
-        </div>
+        </Card>
       ) : (
-        <div className="overflow-auto rounded-[24px] border border-slate-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.08)]">
-          <table id="budgetstructure" className="min-w-[2400px] border-collapse text-sm">
+        <div className={isTableFullScreen ? "fixed inset-0 z-[90] bg-slate-100/95 p-3 sm:p-4" : ""}>
+          {isTableFullScreen && (
+            <>
+              <div className="mb-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+                <p className="text-sm font-semibold text-slate-700">Budget Table - Full App View</p>
+                <button
+                  type="button"
+                  onClick={() => setIsTableFullScreen(false)}
+                  className="glass-button-secondary rounded-lg px-3 py-1.5 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-end sm:inset-x-4 sm:bottom-4">
+                <div className="pointer-events-auto rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_14px_32px_rgba(15,23,42,0.12)] backdrop-blur-sm">
+                  <button
+                    type="button"
+                    onClick={() => addDraftRow()}
+                    disabled={!canManageBudget}
+                    className="glass-button-primary rounded-2xl px-4 py-2 text-sm font-semibold"
+                  >
+                    + Add Row
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+          <Card
+            className={`overflow-auto border bg-white/78 p-0 ${
+              isTableFullScreen
+                ? "h-[calc(100vh-4.5rem)] rounded-2xl border-slate-200 shadow-[0_12px_30px_rgba(15,23,42,0.12)] hover:translate-y-0"
+                : "rounded-[24px] border-white/60 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur-sm"
+            }`}
+          >
+            <table id="budgetstructure" className="border-collapse text-sm bg-white" style={{ minWidth: `${columnWidths.reduce((sum, width) => sum + width, 0)}px` }}>
+            <colgroup>
+              {columnWidths.map((width, index) => (
+                <col key={`col-${index}`} style={{ width: `${width}px` }} />
+              ))}
+            </colgroup>
             <thead className="sticky top-0 z-10">
-              <tr className="bg-blue-100 text-center text-slate-900">
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Sl No</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Item Description</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Qty</th>
-                <th colSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Vendor 1</th>
-                <th colSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Vendor 2</th>
-                <th colSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Vendor 3</th>
-                <th colSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Final Vendor</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Remarks</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">PO Number</th>
-                <th colSpan="3" className="border border-slate-200 px-3 py-3 font-semibold">Transaction Details</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Invoice</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Status</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Qty</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Date</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Certified By</th>
-                <th rowSpan="2" className="border border-slate-200 px-3 py-3 font-semibold">Actions</th>
+              <tr className="bg-slate-100 text-center text-slate-900">
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Sl No{renderColumnResizeHandle(0)}</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Item Description{renderColumnResizeHandle(1)}</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Qty{renderColumnResizeHandle(2)}</th>
+                <th colSpan="2" className="border border-slate-300 px-3 py-3 font-semibold">Vendor 1</th>
+                <th colSpan="2" className="border border-slate-300 px-3 py-3 font-semibold">Vendor 2</th>
+                <th colSpan="2" className="border border-slate-300 px-3 py-3 font-semibold">Vendor 3</th>
+                <th colSpan="2" className="border border-slate-300 px-3 py-3 font-semibold">
+                  <span className="inline-flex items-center gap-1.5">
+                    Final Vendor
+                    <InfoTip text="Finalized Vendor is the selected supplier based on best valid quote and approval." />
+                  </span>
+                </th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Remarks{renderColumnResizeHandle(11)}</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">PO Number{renderColumnResizeHandle(12)}</th>
+                <th colSpan="3" className="border border-slate-300 px-3 py-3 font-semibold">Transaction Details</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Invoice{renderColumnResizeHandle(16)}</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">
+                  <span className="inline-flex items-center gap-1.5">
+                    Status
+                    <InfoTip text="PENDING means awaiting review, APPROVED means validated, PAID means transaction settled." />
+                  </span>
+                  {renderColumnResizeHandle(17)}
+                </th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Qty{renderColumnResizeHandle(18)}</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Date{renderColumnResizeHandle(19)}</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Certified By{renderColumnResizeHandle(20)}</th>
+                <th rowSpan="2" className="relative border border-slate-300 px-3 py-3 font-semibold">Actions{renderColumnResizeHandle(21)}</th>
               </tr>
-              <tr className="bg-blue-50 text-center text-slate-700">
-                <th className="border border-slate-200 px-3 py-2 font-medium">Name</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Amount</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Name</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Amount</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Name</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Amount</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Details</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Amount</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">UTR</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Date</th>
-                <th className="border border-slate-200 px-3 py-2 font-medium">Amount</th>
+              <tr className="bg-slate-50 text-center text-slate-700">
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Name{renderColumnResizeHandle(3)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Amount{renderColumnResizeHandle(4)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Name{renderColumnResizeHandle(5)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Amount{renderColumnResizeHandle(6)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Name{renderColumnResizeHandle(7)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Amount{renderColumnResizeHandle(8)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Details{renderColumnResizeHandle(9)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Amount{renderColumnResizeHandle(10)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">
+                  <span className="inline-flex items-center gap-1.5">
+                    UTR
+                    <InfoTip text="Unique Transaction Reference number from the bank transfer record." />
+                  </span>
+                  {renderColumnResizeHandle(13)}
+                </th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Date{renderColumnResizeHandle(14)}</th>
+                <th className="relative border border-slate-300 px-3 py-2 font-medium">Amount{renderColumnResizeHandle(15)}</th>
               </tr>
             </thead>
             <tbody>
               {items.map((row, rowIndex) => {
                 const cellClass = (field) =>
-                  `border border-slate-200 align-top ${
-                    selectedCell.rowId === row.id && selectedCell.field === field ? "bg-blue-50" : ""
+                  `border border-slate-300 align-top ${
+                    selectedCell.rowId === row.id && selectedCell.field === field ? "bg-blue-50 ring-1 ring-inset ring-blue-300" : "bg-white"
                   }`;
 
                 return (
-                  <tr key={row.id} className="hover:bg-slate-50/70">
-                    <td className="border border-slate-200 px-3 py-2 text-center text-slate-500">{rowIndex + 1}</td>
+                  <Fragment key={row.id}>
+                  <tr key={row.id} className="hover:bg-white/85" style={{ height: getRowHeight(row.id) }}>
+                    <td className={`border border-slate-300 px-3 text-center text-slate-500 bg-slate-50 ${rowSizeConfig.cellPadding}`}>{rowIndex + 1}</td>
                     <td className={cellClass("itemName")}>{renderInput(row, rowIndex, "itemName")}</td>
                     <td className={cellClass("qty")}>{renderInput(row, rowIndex, "qty", "number")}</td>
                     <td className={cellClass("vendor1Name")}>{renderInput(row, rowIndex, "vendor1Name")}</td>
@@ -550,7 +827,7 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
                       <select
                         ref={(element) => registerCellRef(row.id, "status", element)}
                         value={row.status}
-                        disabled={currentUserRole !== "MENTOR"}
+                        disabled={!canManageBudget}
                         onFocus={() => setSelectedCell({ rowId: row.id, field: "status" })}
                         onChange={(event) => {
                           handleCellChange(row.id, "status", event.target.value);
@@ -558,7 +835,7 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
                         }}
                         onBlur={() => handleCellBlur(row.id, "status")}
                         onKeyDown={(event) => handleCellKeyDown(event, rowIndex, "status")}
-                        className="w-full border-0 bg-transparent px-2 py-2 text-sm outline-none focus:bg-blue-50"
+                        className="w-full border-0 bg-transparent px-2 py-2 text-sm outline-none focus:bg-white/90"
                       >
                         {STATUS_OPTIONS.map((option) => (
                           <option key={option} value={option}>
@@ -570,20 +847,21 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
                     <td className={cellClass("invoiceQty")}>{renderInput(row, rowIndex, "invoiceQty", "number")}</td>
                     <td className={cellClass("invoiceDate")}>{renderInput(row, rowIndex, "invoiceDate", "date")}</td>
                     <td className={cellClass("certifiedBy")}>{renderInput(row, rowIndex, "certifiedBy")}</td>
-                    <td className="border border-slate-200 px-3 py-2 align-top">
+                    <td className={`border border-slate-300 px-3 align-top bg-slate-50 ${rowSizeConfig.cellPadding}`}>
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() => persistRow(row.id, { autoVendor: true })}
-                          className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                          disabled={!canManageBudget}
+                          className="glass-button-primary rounded-md px-2 py-1 text-xs font-medium"
                         >
                           Save
                         </button>
-                        {currentUserRole === "MENTOR" && (
+                        {canManageBudget && (
                           <button
                             type="button"
                             onClick={() => deleteRow(row.id)}
-                            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                            className="glass-button-secondary rounded-md px-2 py-1 text-xs font-medium"
                           >
                             Delete
                           </button>
@@ -592,20 +870,36 @@ export default function BudgetTab({ projectId, currentUserRole, projectAccent = 
                       </div>
                     </td>
                   </tr>
+                  <tr key={`${row.id}-resize`} aria-hidden="true">
+                    <td colSpan="22" className="relative h-3 p-0">
+                      <button
+                        type="button"
+                        aria-label="Resize row"
+                        title="Drag row border to resize"
+                        onPointerDown={(event) => startRowResize(event, row.id)}
+                        className="group absolute inset-x-0 top-0 h-3 cursor-row-resize border-0 bg-transparent p-0 outline-none"
+                      >
+                        <span className="absolute left-1/2 top-1/2 h-px w-full -translate-x-1/2 -translate-y-1/2 bg-slate-300 transition group-hover:bg-sky-400" />
+                        <span className="absolute left-1/2 top-1/2 h-2 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full border border-slate-300 bg-white shadow-sm transition group-hover:border-sky-400 group-hover:bg-sky-50" />
+                      </button>
+                    </td>
+                  </tr>
+                  </Fragment>
                 );
               })}
             </tbody>
-          </table>
+            </table>
+          </Card>
         </div>
       )}
 
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+      <Card className="rounded-2xl p-4 text-sm text-slate-600">
         Excel behavior: use Tab to move across inputs, Enter to jump to the next row, and every cell saves on blur.
-      </div>
+      </Card>
 
-      {currentUserRole !== "MENTOR" && (
+      {!canManageBudget && (
         <div className="text-xs text-slate-500">
-          Students can edit cells, while mentors can approve and manage spreadsheet rows.
+          Students can edit cells, while mentors/managers can approve and manage spreadsheet rows.
         </div>
       )}
     </div>

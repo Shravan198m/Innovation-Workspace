@@ -1,6 +1,11 @@
 import { Search, SlidersHorizontal, X } from "lucide-react";
 
-const STATUS_OPTIONS = ["TASK", "IN PROGRESS", "REVIEW", "COMPLETED"];
+const STATUS_OPTIONS = [
+  { value: "todo", label: "To Do" },
+  { value: "submitted", label: "Submitted" },
+  { value: "completed", label: "Completed" },
+  { value: "rejected", label: "Rejected" },
+];
 
 export default function FilterBar({
   search,
@@ -16,21 +21,21 @@ export default function FilterBar({
   onClear,
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_14px_30px_rgba(15,23,42,0.08)] backdrop-blur-sm">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 flex-1 flex-col gap-3 lg:flex-row lg:items-center">
+    <section className="glass-card rounded-2xl p-4 sm:p-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 flex-1 flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
           <div className="relative min-w-0 flex-1 lg:max-w-md">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search tasks by title, assignee, or description"
-              className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+              className="glass-input w-full rounded-xl py-3 pl-9 pr-3 text-sm"
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="glass-surface inline-flex items-center gap-2 rounded-xl px-3 py-2">
               <SlidersHorizontal className="h-4 w-4 text-slate-500" />
               <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Filters</span>
             </div>
@@ -38,12 +43,12 @@ export default function FilterBar({
             <select
               value={status}
               onChange={(event) => setStatus(event.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+              className="glass-input min-w-[10rem] rounded-xl px-3 py-3 text-sm"
             >
               <option value="">All status</option>
-              {STATUS_OPTIONS.map((value) => (
-                <option key={value} value={value}>
-                  {value}
+              {STATUS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -52,7 +57,7 @@ export default function FilterBar({
               <select
                 value={member}
                 onChange={(event) => setMember(event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+                className="glass-input min-w-[12rem] rounded-xl px-3 py-3 text-sm"
               >
                 <option value="">All members</option>
                 {memberOptions.map((name) => (
@@ -66,13 +71,13 @@ export default function FilterBar({
                 value={member}
                 onChange={(event) => setMember(event.target.value)}
                 placeholder="Filter by member"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+                className="glass-input min-w-[12rem] rounded-xl px-3 py-3 text-sm"
               />
             )}
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-3 xl:justify-end">
+        <div className="flex flex-wrap items-center justify-between gap-3 xl:justify-end">
           <p className="text-sm text-slate-500">
             Showing <span className="font-semibold text-slate-700">{resultCount}</span> of {totalCount}
           </p>
@@ -86,7 +91,7 @@ export default function FilterBar({
           <button
             type="button"
             onClick={onClear}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            className="glass-button-secondary inline-flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-medium"
           >
             <X className="h-4 w-4" />
             Clear

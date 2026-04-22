@@ -1,29 +1,61 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import Logo from "../components/Logo";
+import { useAuth } from "../context/AuthContext";
 
 const showcaseCards = [
   {
+    id: "mentor",
     title: "Mentor Workspace",
     subtitle: "Review reports, approve milestones, and guide teams.",
     gradient: "from-blue-500 to-cyan-400",
   },
   {
+    id: "student",
     title: "Student Workspace",
     subtitle: "Manage tasks, submit documents, and track delivery.",
     gradient: "from-indigo-500 to-violet-500",
   },
   {
-    title: "Department Review",
-    subtitle: "Monitor quality, budgets, and certification readiness.",
+    id: "manager",
+    title: "Manager Workspace",
+    subtitle: "Oversee delivery, assign priorities, and unblock execution.",
     gradient: "from-emerald-500 to-teal-500",
   },
 ];
+
+const workspaceDetails = {
+  mentor: {
+    title: "Mentor Work Table",
+    points: [
+      "Report review happens daily to keep mentor feedback current.",
+      "Milestone validation is checked weekly before approvals move ahead.",
+      "Risk follow-up is tracked twice a week for escalation control.",
+    ],
+  },
+  student: {
+    title: "Student Work Table",
+    points: [
+      "Task updates are entered daily so progress stays visible.",
+      "Document uploads happen weekly with verified submission history.",
+      "Delivery tracking keeps completion status and deadlines aligned.",
+    ],
+  },
+  manager: {
+    title: "Manager Work Table",
+    points: [
+      "Project allocation is updated as needed with clear ownership.",
+      "Portfolio tracking runs daily to keep KPI visibility current.",
+      "Blocker resolution is reviewed weekly until action items close.",
+    ],
+  },
+};
 
 const profileCards = [
   {
     name: "Richard Jefferson",
     role: "Project Mentor",
-    org: "Electronics Department",
+    org: "Electronics Division",
     initials: "RJ",
     tilt: "-rotate-2",
     offset: "mt-4",
@@ -38,8 +70,8 @@ const profileCards = [
   },
   {
     name: "Joseph Graham",
-    role: "Department Reviewer",
-    org: "Innovation Hub Cell",
+    role: "Program Manager",
+    org: "Innovation Hub Office",
     initials: "JG",
     tilt: "-rotate-1",
     offset: "mt-5",
@@ -114,8 +146,10 @@ const trustedLogos = [
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  const { isAuthenticated, user, logout } = useAuth();
   const rootRef = useRef(null);
   const [navSolid, setNavSolid] = useState(false);
+  const [expandedWorkspaceId, setExpandedWorkspaceId] = useState(null);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -160,7 +194,7 @@ export default function LandingPage() {
     };
   }, []);
 
-  const openDemo = () => {
+  const openWorkspace = () => {
     navigate("/projects");
   };
 
@@ -189,61 +223,73 @@ export default function LandingPage() {
         }`}
       >
         <div className="flex items-center gap-3">
-          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white">IH</span>
-          <div>
-            <p className="text-base font-semibold text-slate-900">Innovation Hub OS</p>
-            <p className="text-xs text-slate-500">Academic Project Operations Platform</p>
-          </div>
+          <Logo />
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={openLogin}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-          >
-            Login
-          </button>
-          <button
-            type="button"
-            onClick={openDemo}
-            className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(37,99,235,0.35)] transition hover:bg-blue-700"
-          >
-            Open Demo Workspace
-          </button>
+          {!isAuthenticated ? (
+            <button
+              type="button"
+              onClick={openLogin}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Login
+            </button>
+          ) : (
+            <>
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-teal-400 text-sm font-semibold text-white">
+                {user?.name?.charAt(0)?.toUpperCase() || "U"}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  logout();
+                  navigate("/", { replace: true });
+                }}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Logout
+              </button>
+            </>
+          )}
         </div>
       </header>
 
       <section className="mx-auto grid w-full max-w-[1500px] items-start gap-8 px-6 pb-10 pt-8 lg:grid-cols-[1.2fr_0.8fr] lg:px-10 lg:pt-10">
         <div className="reveal-on-scroll" data-reveal>
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-700">Company-grade academic operations</p>
-          <h1 className="font-sans mt-4 max-w-[860px] text-[clamp(2.1rem,3.75vw,4rem)] font-extrabold leading-[1.05] tracking-[-0.018em] text-slate-900">
+          <h1 className="heading-font heading-xl mt-4 max-w-[860px] text-slate-900">
             <span className="block">Build, Track, Review and</span>
             <span className="block">Deliver Academic Projects</span>
             <span className="block">in One Unified Workspace</span>
           </h1>
           <p className="mt-6 max-w-3xl text-base leading-7 text-slate-600 sm:text-lg">
-            A single platform for students, mentors, and departments to manage tasks, approvals, budgets,
+            A single platform for students, mentors, and managers to manage tasks, approvals, budgets,
             reports, and documents with real-time progress visibility.
           </p>
 
-          <div className="mt-10 flex w-full max-w-2xl flex-col gap-3 rounded-2xl border border-white/40 bg-white/65 p-3 shadow-[0_20px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:flex-row">
-            <input
-              type="text"
-              placeholder="innovation-hub@college.edu"
-              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-            />
-            <button
-              type="button"
-              onClick={openDemo}
-              className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
-            >
-              Get Started in Demo
-            </button>
+          <div className="mt-10">
+            {!isAuthenticated ? (
+              <button
+                type="button"
+                onClick={openLogin}
+                className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
+              >
+                Login to Continue
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={openWorkspace}
+                className="rounded-xl bg-gradient-to-r from-blue-600 to-teal-500 px-6 py-3 text-sm font-semibold text-white transition hover:from-blue-700 hover:to-teal-600"
+              >
+                Enter Workflow -&gt;
+              </button>
+            )}
           </div>
 
           <p className="mt-3 text-xs text-slate-500">
-            Secure login is now enabled. Use Demo or Login to access the live projects dashboard.
+            Secure login is enabled with role-aware access controls for workspace pages.
           </p>
 
         </div>
@@ -333,11 +379,31 @@ export default function LandingPage() {
           {showcaseCards.map((card) => (
             <article
               key={card.title}
-              className="rounded-[22px] border border-white/50 bg-white/75 p-5 text-left shadow-[0_18px_42px_rgba(15,23,42,0.1)] backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:shadow-[0_28px_60px_rgba(15,23,42,0.14)]"
+              className={`rounded-[22px] border bg-white/75 p-5 text-left shadow-[0_18px_42px_rgba(15,23,42,0.1)] backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:shadow-[0_28px_60px_rgba(15,23,42,0.14)] ${
+                expandedWorkspaceId === card.id ? "border-cyan-300" : "border-white/50"
+              }`}
             >
-              <div className={`mb-4 h-28 rounded-2xl bg-gradient-to-r ${card.gradient}`} />
-              <h2 className="text-lg font-semibold text-slate-900">{card.title}</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">{card.subtitle}</p>
+              <button
+                type="button"
+                onClick={() => setExpandedWorkspaceId((prev) => (prev === card.id ? null : card.id))}
+                className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 rounded-2xl"
+                aria-expanded={expandedWorkspaceId === card.id}
+              >
+                <div className={`mb-4 h-28 rounded-2xl bg-gradient-to-r ${card.gradient}`} />
+                <h2 className="text-lg font-semibold text-slate-900">{card.title}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{card.subtitle}</p>
+              </button>
+
+              {expandedWorkspaceId !== null && (
+                <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
+                  {(workspaceDetails[card.id]?.points || []).map((point) => (
+                    <div key={point} className="flex items-start gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <span className="mt-1 h-2 w-2 rounded-full bg-cyan-500" />
+                      <span>{point}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </article>
           ))}
         </div>

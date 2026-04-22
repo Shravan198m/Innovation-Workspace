@@ -4,17 +4,22 @@ const path = require("path");
 const cors = require("cors");
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
-require("dotenv").config();
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 const pool = require("./db");
+
+console.log("[startup] RESEND_API_KEY:", process.env.RESEND_API_KEY ? "set" : "missing");
+console.log("[startup] RESEND_FROM:", process.env.RESEND_FROM ? "set" : "missing");
 
 const authRoutes = require("./routes/authRoutes");
 const activityRoutes = require("./routes/activityRoutes");
 const budgetRoutes = require("./routes/budgetRoutes");
+const chatRoutes = require("./routes/chatRoutes");
 const documentRoutes = require("./routes/documentRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const projectRoutes = require("./routes/projectRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const taskRoutes = require("./routes/taskRoutes");
+const { isPrivilegedRole } = require("./middleware/role");
 
 const app = express();
 const server = http.createServer(app);
@@ -85,7 +90,7 @@ async function canAccessProject(user, projectId) {
     return false;
   }
 
-  if (user.role === "MENTOR" || user.role === "ADMIN") {
+  if (isPrivilegedRole(user.role)) {
     return true;
   }
 
@@ -198,11 +203,21 @@ app.get("/api/health", (_, res) => {
   res.json({ ok: true, service: "innovation-hub-api" });
 });
 
+app.get("/api", (_, res) => {
+  res.json({
+    ok: true,
+    service: "innovation-hub-api",
+    message: "API is running.",
+    health: "/api/health",
+  });
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/tasks", taskRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/budgets", budgetRoutes);
+app.use("/api/chat", chatRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/team-members", require("./routes/teamMemberRoutes"));
 app.use("/api/notifications", notificationRoutes);

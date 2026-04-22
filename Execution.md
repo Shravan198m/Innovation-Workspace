@@ -1,0 +1,1 @@
+powershell -ExecutionPolicy Bypass -File START_PROJECT.ps1

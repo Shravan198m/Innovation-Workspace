@@ -4,6 +4,7 @@ const { authenticateToken, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/activityLog");
 
 router.use(authenticateToken);
+router.use(requireRole("MENTOR", "ADMIN", "TEAM_LEAD"));
 
 const ALLOWED_STATUSES = ["PENDING", "APPROVED", "PAID"];
 
@@ -179,7 +180,7 @@ router.get("/:projectId", async (req, res) => {
   }
 });
 
-router.post("/:projectId", async (req, res) => {
+router.post("/:projectId", requireRole("ADMIN", "TEAM_LEAD"), async (req, res) => {
   const projectId = Number(req.params.projectId);
   const payload = buildEntryPayload(req.body || {});
 
@@ -229,7 +230,7 @@ router.post("/:projectId", async (req, res) => {
   }
 });
 
-router.put("/:id", requireRole("MENTOR", "ADMIN"), async (req, res) => {
+router.put("/:id", requireRole("ADMIN", "TEAM_LEAD"), async (req, res) => {
   const payload = buildEntryPayload(req.body || {});
 
   try {
@@ -279,7 +280,7 @@ router.put("/:id", requireRole("MENTOR", "ADMIN"), async (req, res) => {
   }
 });
 
-router.delete("/:id", requireRole("MENTOR", "ADMIN"), async (req, res) => {
+router.delete("/:id", requireRole("ADMIN", "TEAM_LEAD"), async (req, res) => {
   try {
     const existing = await pool.query(
       `SELECT id, project_id AS "projectId", item_name AS "itemName" FROM budget_entries WHERE id = $1`,

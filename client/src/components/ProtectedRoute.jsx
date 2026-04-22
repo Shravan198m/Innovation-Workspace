@@ -7,7 +7,7 @@ export default function ProtectedRoute({ children }) {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-slate-50 text-slate-600">
+      <div className="app-page flex items-center justify-center text-slate-600">
         Preparing workspace...
       </div>
     );

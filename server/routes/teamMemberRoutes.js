@@ -29,7 +29,7 @@ router.get("/:projectId", async (req, res) => {
 });
 
 // POST add new team member
-router.post("/:projectId", requireRole("MENTOR", "ADMIN"), async (req, res) => {
+router.post("/:projectId", requireRole("admin"), async (req, res) => {
   const { name, usn, email, photo, role } = req.body;
   const projectId = Number(req.params.projectId);
 
@@ -38,8 +38,8 @@ router.post("/:projectId", requireRole("MENTOR", "ADMIN"), async (req, res) => {
   }
 
   const memberRole = role || "STUDENT";
-  if (!["MENTOR", "STUDENT"].includes(memberRole)) {
-    return res.status(400).json({ message: "role must be MENTOR or STUDENT." });
+  if (!["MENTOR", "STUDENT", "TEAM_LEAD"].includes(memberRole)) {
+    return res.status(400).json({ message: "role must be MENTOR, STUDENT, or TEAM_LEAD." });
   }
 
   try {
@@ -67,7 +67,7 @@ router.post("/:projectId", requireRole("MENTOR", "ADMIN"), async (req, res) => {
 });
 
 // PUT update team member
-router.put("/:id", requireRole("MENTOR", "ADMIN"), async (req, res) => {
+router.put("/:id", requireRole("admin"), async (req, res) => {
   const { name, email, photo, role } = req.body;
   const id = Number(req.params.id);
 
@@ -101,7 +101,7 @@ router.put("/:id", requireRole("MENTOR", "ADMIN"), async (req, res) => {
 });
 
 // DELETE team member
-router.delete("/:id", requireRole("MENTOR", "ADMIN"), async (req, res) => {
+router.delete("/:id", requireRole("admin"), async (req, res) => {
   try {
     const result = await pool.query(
       `DELETE FROM team_members WHERE id = $1 RETURNING id`,

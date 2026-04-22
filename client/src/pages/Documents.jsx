@@ -3,6 +3,7 @@ import DocumentsTab from "./DocumentsTab";
 import ProjectWorkspaceShell from "../components/ProjectWorkspaceShell";
 import { useAuth } from "../context/AuthContext";
 import { useProjects } from "../context/ProjectsContext";
+import { normalizeRole } from "../utils/roles";
 
 export default function Documents() {
   const { projectId } = useParams();
@@ -18,7 +19,7 @@ export default function Documents() {
     <ProjectWorkspaceShell project={project}>
       <DocumentsTab
         projectId={project.id}
-        currentUserRole={user?.role || "STUDENT"}
+        currentUserRole={normalizeRole(user?.role)}
         projectAccent={project.accent}
       />
     </ProjectWorkspaceShell>

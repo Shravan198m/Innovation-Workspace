@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
-
-const STATUS_CONFIG = {
-  PENDING: { icon: "⏳", color: "bg-yellow-100 text-yellow-800" },
-  APPROVED: { icon: "✅", color: "bg-green-100 text-green-800" },
-  REJECTED: { icon: "❌", color: "bg-red-100 text-red-800" },
-};
+import { getApiErrorMessage } from "../services/apiError";
+import Card from "../components/ui/Card";
+import Badge from "../components/ui/Badge";
+import StatusBadge from "../components/ui/StatusBadge";
+import { canReviewWork } from "../utils/roles";
 
 const DOCUMENT_TYPES = {
   DPR: { label: "Design Project Report", icon: "📋" },
@@ -13,26 +12,38 @@ const DOCUMENT_TYPES = {
   OTHER: { label: "Other Documents", icon: "📄" },
 };
 
-export default function DocumentsTab({ projectId, currentUserRole, projectAccent = "from-cyan-700 to-teal-500" }) {
+export default function DocumentsTab({ projectId, currentUserRole }) {
+  const canReviewDocuments = canReviewWork(currentUserRole);
+  const isStudent = String(currentUserRole || "").toLowerCase() === "student";
+
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showUploadForm, setShowUploadForm] = useState(false);
+  const [message, setMessage] = useState("");
   const [uploadData, setUploadData] = useState({
     fileName: "",
     category: "DPR",
     fileUrl: "",
   });
+  const [selectedFile, setSelectedFile] = useState(null);
 
   useEffect(() => {
     fetchDocuments();
   }, [projectId]);
 
+  const openUploadForCategory = (category) => {
+    setUploadData((prev) => ({ ...prev, category }));
+    setShowUploadForm(true);
+    setMessage("");
+  };
+
   const fetchDocuments = async () => {
     try {
       const response = await api.get(`/documents/${projectId}`);
       setDocuments(Array.isArray(response.data) ? response.data : []);
+      setMessage("");
     } catch (error) {
-      console.error("Failed to fetch documents", error);
+      setMessage(getApiErrorMessage(error, "Failed to fetch documents."));
     } finally {
       setLoading(false);
     }
@@ -40,41 +51,57 @@ export default function DocumentsTab({ projectId, currentUserRole, projectAccent
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    
-    if (!uploadData.fileName.trim()) {
-      alert("Please enter file name");
+
+    const resolvedFileName = (uploadData.fileName || selectedFile?.name || "").trim();
+    if (!resolvedFileName) {
+      setMessage("Please enter file name or choose a file.");
+      return;
+    }
+
+    if (!selectedFile && !uploadData.fileUrl.trim()) {
+      setMessage("Please choose a file from your computer or provide file URL.");
       return;
     }
 
     try {
-      await api.post(`/documents`, {
-        projectId,
-        fileName: uploadData.fileName.trim(),
-        category: uploadData.category,
-        fileUrl: uploadData.fileUrl.trim(),
+      const formData = new FormData();
+      formData.append("projectId", String(projectId));
+      formData.append("fileName", resolvedFileName);
+      formData.append("category", uploadData.category);
+      formData.append("fileUrl", uploadData.fileUrl.trim());
+
+      if (selectedFile) {
+        formData.append("file", selectedFile);
+      }
+
+      await api.post(`/documents`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
       });
 
       setUploadData({ fileName: "", category: "DPR", fileUrl: "" });
+      setSelectedFile(null);
       setShowUploadForm(false);
       fetchDocuments();
-      alert("Document uploaded successfully!");
+      setMessage("Document uploaded successfully.");
     } catch (error) {
-      alert("Failed to upload document");
+      setMessage(getApiErrorMessage(error, "Failed to upload document."));
     }
   };
 
   const handleApprove = async (docId, status) => {
-    if (currentUserRole !== "MENTOR" && currentUserRole !== "ADMIN") {
-      alert("Only mentors can approve documents");
+    if (!canReviewDocuments) {
+      setMessage("Only mentor or manager can approve documents.");
       return;
     }
 
     try {
       await api.put(`/documents/${docId}/status`, { status });
       fetchDocuments();
-      alert(`Document ${status.toLowerCase()}!`);
+      setMessage(`Document ${status.toLowerCase()}!`);
     } catch (error) {
-      alert("Failed to update document status");
+      setMessage(getApiErrorMessage(error, "Failed to update document status."));
     }
   };
 
@@ -84,12 +111,27 @@ export default function DocumentsTab({ projectId, currentUserRole, projectAccent
     OTHER: documents.filter((d) => d.category === "OTHER"),
   };
 
+  const resolveDocumentUrl = (fileUrl) => {
+    const value = String(fileUrl || "").trim();
+    if (!value) {
+      return "";
+    }
+
+    if (/^https?:\/\//i.test(value)) {
+      return value;
+    }
+
+    const apiBase = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
+    const backendOrigin = apiBase.replace(/\/api\/?$/, "");
+    return `${backendOrigin}${value.startsWith("/") ? "" : "/"}${value}`;
+  };
+
   const DocumentCard = ({ doc }) => (
-    <div className="rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_50px_rgba(15,23,42,0.10)]">
+    <Card className="app-elevate rounded-[22px] p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-50 text-2xl">
+          <div className="mb-2 flex items-center gap-3">
+            <span className="glass-surface flex h-12 w-12 items-center justify-center rounded-2xl text-2xl">
               {DOCUMENT_TYPES[doc.category]?.icon || "📄"}
             </span>
             <div>
@@ -105,28 +147,23 @@ export default function DocumentsTab({ projectId, currentUserRole, projectAccent
         </div>
 
         <div className="flex items-center gap-3">
-          <span
-            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${
-              STATUS_CONFIG[doc.status]?.color
-            }`}
-          >
-            {STATUS_CONFIG[doc.status]?.icon} {doc.status}
-          </span>
+          <StatusBadge status={doc.status.toLowerCase()} />
+          <Badge>{DOCUMENT_TYPES[doc.category]?.label || doc.category}</Badge>
 
           <div className="flex gap-2">
             <button
               onClick={() =>
-                doc.fileUrl
-                  ? window.open(doc.fileUrl, "_blank")
+                resolveDocumentUrl(doc.fileUrl)
+                  ? window.open(resolveDocumentUrl(doc.fileUrl), "_blank")
                   : alert("No file URL provided for this document")
               }
-              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+              className="rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 px-3 py-2 text-sm font-semibold text-white transition hover:from-blue-700 hover:to-cyan-600"
               title="View/Download"
             >
               📥
             </button>
 
-            {currentUserRole === "MENTOR" && doc.status === "PENDING" && (
+            {canReviewDocuments && doc.status === "PENDING" && (
               <>
                 <button
                   onClick={() => handleApprove(doc.id, "APPROVED")}
@@ -141,48 +178,57 @@ export default function DocumentsTab({ projectId, currentUserRole, projectAccent
           </div>
         </div>
       </div>
-    </div>
+    </Card>
   );
 
   return (
     <div className="space-y-6">
-      <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
-        <div className={`bg-gradient-to-r ${projectAccent} px-6 py-6 text-white sm:px-8`}>
+      <Card className="overflow-hidden rounded-[28px] p-0">
+        <div className="bg-[linear-gradient(135deg,rgba(37,99,235,0.18)_0%,rgba(14,165,164,0.14)_100%)] px-6 py-6 text-slate-900 sm:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/80">Documents</p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">Project Documents</h2>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-white/80">
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Documents</p>
+              <h2 className="heading-lg heading-project mt-2">Project Documents</h2>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
                 DPR uploads, resource files, and project documents organized in a clean enterprise view.
+              </p>
+              <p className="mt-2 text-xs font-medium text-slate-500">
+                Students can upload documents here. Mentors/Admin review and approve.
               </p>
             </div>
 
             <button
               onClick={() => setShowUploadForm(!showUploadForm)}
-              className="inline-flex items-center justify-center rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-slate-950/20 transition hover:bg-slate-100"
+              className="glass-button-primary inline-flex items-center justify-center rounded-2xl px-5 py-3 text-sm font-semibold"
             >
-              {showUploadForm ? "Close Upload" : "📤 Upload Document"}
+              {showUploadForm ? "Close Upload" : isStudent ? "Upload Document" : "Manage Uploads"}
             </button>
           </div>
         </div>
 
-        <div className="grid gap-3 border-t border-slate-200 bg-slate-50 px-6 py-5 sm:grid-cols-3 sm:px-8">
+        <div className="grid gap-3 border-t border-white/35 bg-white/28 px-6 py-5 sm:grid-cols-3 sm:px-8 backdrop-blur-md">
           {[
             { label: "Total Documents", value: documents.length },
             { label: "Pending Review", value: documents.filter((doc) => doc.status === "PENDING").length },
             { label: "Approved", value: documents.filter((doc) => doc.status === "APPROVED").length },
           ].map((item) => (
-            <article key={item.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <Card key={item.label} className="rounded-2xl p-4">
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{item.label}</p>
               <p className="mt-2 text-3xl font-semibold text-slate-900">{item.value}</p>
-            </article>
+            </Card>
           ))}
         </div>
-      </div>
+      </Card>
+
+      {message && (
+        <Card className="rounded-[24px] px-4 py-3 text-sm text-slate-700">
+          {message}
+        </Card>
+      )}
 
       {/* Upload Form */}
       {showUploadForm && (
-        <div className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-[0_12px_40px_rgba(15,23,42,0.08)]">
+        <Card className="rounded-[24px] p-6">
           <div className="mb-5">
             <h3 className="text-xl font-semibold text-slate-900">Upload Document</h3>
             <p className="text-sm text-slate-500">Add a DPR, resource file, or supporting project asset.</p>
@@ -196,7 +242,7 @@ export default function DocumentsTab({ projectId, currentUserRole, projectAccent
                 <select
                   value={uploadData.category}
                   onChange={(e) => setUploadData({ ...uploadData, category: e.target.value })}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                  className="glass-input w-full rounded-2xl px-4 py-3 text-sm"
                 >
                   {Object.entries(DOCUMENT_TYPES).map(([key, { label }]) => (
                     <option key={key} value={key}>
@@ -215,7 +261,7 @@ export default function DocumentsTab({ projectId, currentUserRole, projectAccent
                   value={uploadData.fileName}
                   onChange={(e) => setUploadData({ ...uploadData, fileName: e.target.value })}
                   placeholder="document_name.pdf"
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                  className="glass-input w-full rounded-2xl px-4 py-3 text-sm"
                 />
               </div>
             </div>
@@ -229,59 +275,85 @@ export default function DocumentsTab({ projectId, currentUserRole, projectAccent
                 value={uploadData.fileUrl}
                 onChange={(e) => setUploadData({ ...uploadData, fileUrl: e.target.value })}
                 placeholder="https://example.com/file.pdf"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                className="glass-input w-full rounded-2xl px-4 py-3 text-sm"
               />
             </div>
 
-            <div className="rounded-[22px] border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-              <p className="mb-2 text-slate-700">📋 Select file to upload</p>
-              <p className="text-xs text-slate-500">(Simulated - Enter filename above)</p>
+            <div className="glass-card rounded-[22px] border-dashed p-8 text-center">
+              <label className="glass-button-secondary inline-flex cursor-pointer items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold">
+                📎 Choose File From Computer
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setSelectedFile(file);
+                    if (file && !uploadData.fileName.trim()) {
+                      setUploadData((prev) => ({ ...prev, fileName: file.name }));
+                    }
+                  }}
+                />
+              </label>
+              <p className="mt-3 text-sm text-slate-700">
+                {selectedFile ? `Selected: ${selectedFile.name}` : "No file selected"}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">PDF, docs, images, or any supported file from your computer.</p>
             </div>
 
             <div className="flex gap-3">
               <button
                 type="submit"
-                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                className="glass-button-primary rounded-2xl px-5 py-3 text-sm font-semibold"
               >
                 Upload
               </button>
               <button
                 type="button"
                 onClick={() => setShowUploadForm(false)}
-                className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                className="glass-button-secondary rounded-2xl px-5 py-3 text-sm font-semibold"
               >
                 Cancel
               </button>
             </div>
           </form>
-        </div>
+        </Card>
       )}
 
       {/* Documents sections */}
       {loading ? (
-        <div className="rounded-[24px] border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
+        <Card className="rounded-[24px] p-8 text-center text-slate-500">
           Loading documents...
-        </div>
+        </Card>
       ) : (
         <div className="space-y-8">
           {Object.entries(DOCUMENT_TYPES).map(([type, { label, icon }]) => (
             <div key={type}>
-              <div className="mb-4 flex items-center gap-3">
-                <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-2xl">
-                  {icon}
-                </span>
-                <h3 className="text-lg font-semibold text-slate-900">{label}</h3>
-                {groupedDocuments[type].length > 0 && (
-                  <span className="text-sm text-slate-500">
-                    ({groupedDocuments[type].length})
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-2xl">
+                    {icon}
                   </span>
-                )}
+                  <h3 className="text-lg font-semibold text-slate-900">{label}</h3>
+                  {groupedDocuments[type].length > 0 && (
+                    <span className="text-sm text-slate-500">
+                      ({groupedDocuments[type].length})
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => openUploadForCategory(type)}
+                  className="glass-button-primary rounded-xl px-4 py-2 text-sm font-semibold"
+                >
+                  Upload {label}
+                </button>
               </div>
 
               {groupedDocuments[type].length === 0 ? (
-                <p className="rounded-[20px] border border-dashed border-slate-300 bg-white p-5 text-center text-sm text-slate-500 shadow-sm">
+                <Card className="rounded-[20px] border-dashed p-5 text-center text-sm text-slate-500">
                   No {label.toLowerCase()} uploaded
-                </p>
+                </Card>
               ) : (
                 <div className="space-y-3">
                   {groupedDocuments[type].map((doc) => (

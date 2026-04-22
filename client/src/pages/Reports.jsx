@@ -3,6 +3,7 @@ import ReportsTab from "./ReportsTab";
 import ProjectWorkspaceShell from "../components/ProjectWorkspaceShell";
 import { useAuth } from "../context/AuthContext";
 import { useProjects } from "../context/ProjectsContext";
+import { normalizeRole } from "../utils/roles";
 
 export default function Reports() {
   const { projectId } = useParams();
@@ -18,7 +19,7 @@ export default function Reports() {
     <ProjectWorkspaceShell project={project}>
       <ReportsTab
         projectId={project.id}
-        currentUserRole={user?.role || "STUDENT"}
+        currentUserRole={normalizeRole(user?.role)}
         projectAccent={project.accent}
       />
     </ProjectWorkspaceShell>

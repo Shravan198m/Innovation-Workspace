@@ -1,0 +1,56 @@
+.planner-shell .rbc-calendar {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 16px;
+  padding: 8px;
+}
+
+.planner-shell .rbc-time-header,
+.planner-shell .rbc-time-content,
+.planner-shell .rbc-time-view,
+.planner-shell .rbc-header,
+.planner-shell .rbc-time-gutter,
+.planner-shell .rbc-day-slot .rbc-time-slot {
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.planner-shell .rbc-header {
+  color: #cbd5e1;
+  font-weight: 700;
+  padding: 10px 4px;
+}
+
+.planner-shell .rbc-time-gutter .rbc-timeslot-group,
+.planner-shell .rbc-day-slot .rbc-time-slot {
+  color: #94a3b8;
+}
+
+.planner-shell .rbc-today {
+  background-color: rgba(14, 165, 233, 0.08);
+}
+
+.planner-shell .rbc-off-range-bg {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.planner-shell .rbc-toolbar button {
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(30, 41, 59, 0.75);
+}
+
+.planner-shell .rbc-toolbar button.rbc-active,
+.planner-shell .rbc-toolbar button:hover,
+.planner-shell .rbc-toolbar button:focus {
+  background: rgba(37, 99, 235, 0.35);
+  color: #fff;
+}
+
+.planner-shell .rbc-toolbar-label {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.planner-shell .rbc-event {
+  border: none;
+}

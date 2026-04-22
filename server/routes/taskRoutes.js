@@ -5,9 +5,35 @@ const pool = require("../db");
 const { authenticateToken } = require("../middleware/auth");
 const { logActivity } = require("../utils/activityLog");
 const { notifyUsersByIds } = require("../utils/notifications");
+const { isManagerRole, canManageTasks, normalizeRole } = require("../middleware/role");
 const multer = require("multer");
 
 router.use(authenticateToken);
+
+let taskColumnsReady;
+
+function ensureTaskColumns() {
+  if (!taskColumnsReady) {
+    taskColumnsReady = (async () => {
+      await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type TEXT DEFAULT 'weekly'`);
+      await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT ''`);
+      await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS rejection_reason TEXT DEFAULT ''`);
+      await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time TIMESTAMP`);
+      await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time TIMESTAMP`);
+    })();
+  }
+
+  return taskColumnsReady;
+}
+
+router.use(async (_req, res, next) => {
+  try {
+    await ensureTaskColumns();
+    return next();
+  } catch {
+    return res.status(500).json({ message: "Failed to initialize task schema." });
+  }
+});
 
 const uploadsDir = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(uploadsDir)) {
@@ -18,10 +44,182 @@ const upload = multer({ dest: uploadsDir });
 
 function hasMentorOnlyUpdate(payload) {
   return (
-    payload.status === "COMPLETED" ||
-    payload.approvalStatus === "approved" ||
-    payload.approvalStatus === "APPROVED"
+    ["completed", "rejected"].includes(normalizeTaskStatus(payload.status)) ||
+    ["approved", "rejected", "mentor-approved"].includes(normalizeApprovalStatus(payload.approvalStatus))
   );
+}
+
+function normalizeApprovalStatus(status) {
+  const normalized = String(status || "not-requested").trim().toLowerCase().replace(/[\s_]+/g, "-");
+
+  if (["approved", "rejected", "requested", "not-requested", "mentor-approved"].includes(normalized)) {
+    return normalized;
+  }
+
+  return "not-requested";
+}
+
+function normalizeTaskStatus(status) {
+  const normalized = String(status || "todo").trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+  if (["task", "todo"].includes(normalized)) {
+    return "todo";
+  }
+
+  if (normalized === "in_progress") {
+    return "submitted";
+  }
+
+  if (["review", "submitted"].includes(normalized)) {
+    return "submitted";
+  }
+
+  if (normalized === "approved") {
+    return "submitted";
+  }
+
+  if (normalized === "completed") {
+    return "completed";
+  }
+
+  if (normalized === "rejected") {
+    return "rejected";
+  }
+
+  return "todo";
+}
+
+function normalizeTaskType(taskType) {
+  const normalized = String(taskType || "weekly").trim().toLowerCase();
+  return normalized === "daily" ? "daily" : "weekly";
+}
+
+function dateStringFromOffset(daysOffset) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + daysOffset);
+  return date.toISOString().slice(0, 10);
+}
+
+function resolveDueDateInput(dueDate, taskType) {
+  if (dueDate) {
+    return dueDate;
+  }
+
+  const normalizedTaskType = normalizeTaskType(taskType);
+  return normalizedTaskType === "daily" ? dateStringFromOffset(0) : dateStringFromOffset(7);
+}
+
+function deriveAppStatus(status, approvalStatus) {
+  const normalizedStatus = normalizeTaskStatus(status);
+  const normalizedApprovalStatus = normalizeApprovalStatus(approvalStatus);
+
+  if (normalizedStatus === "completed") {
+    return "completed";
+  }
+
+  if (normalizedStatus === "submitted" && normalizedApprovalStatus === "rejected") {
+    return "rejected";
+  }
+
+  return normalizedStatus;
+}
+
+function toDbTaskStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+
+  if (normalized === "todo") {
+    return "TASK";
+  }
+
+  if (normalized === "submitted") {
+    return "REVIEW";
+  }
+
+  if (normalized === "completed") {
+    return "COMPLETED";
+  }
+
+  if (normalized === "rejected") {
+    return "REVIEW";
+  }
+
+  return "TASK";
+}
+
+function normalizeApprovalForStatus(status, approvalStatus) {
+  const normalizedStatus = normalizeTaskStatus(status);
+  const normalizedApprovalStatus = normalizeApprovalStatus(approvalStatus);
+
+  if (normalizedStatus === "completed") {
+    return "approved";
+  }
+
+  if (normalizedStatus === "rejected") {
+    return "rejected";
+  }
+
+  if (normalizedStatus === "submitted" && normalizedApprovalStatus === "approved") {
+    return "mentor-approved";
+  }
+
+  if (normalizedStatus === "submitted" && normalizedApprovalStatus === "not-requested") {
+    return "requested";
+  }
+
+  return normalizedApprovalStatus;
+}
+
+function normalizeTaskRow(row) {
+  if (!row) {
+    return row;
+  }
+
+  const approvalStatus = normalizeApprovalStatus(row.approvalStatus || row.approval_status);
+
+  return {
+    ...row,
+    status: deriveAppStatus(row.status, approvalStatus),
+    approvalStatus,
+    taskType: normalizeTaskType(row.taskType || row.task_type),
+    startTime: row.startTime || row.start_time || null,
+    endTime: row.endTime || row.end_time || null,
+  };
+}
+
+function canStudentChangeStatus(status) {
+  return ["todo", "submitted"].includes(normalizeTaskStatus(status));
+}
+
+function isTaskOwnedByStudent(task, user) {
+  const assignee = String(task?.assignee || "").trim().toLowerCase();
+  const studentName = String(user?.name || "").trim().toLowerCase();
+  const studentEmail = String(user?.email || "").trim().toLowerCase();
+
+  if (!assignee) {
+    return false;
+  }
+
+  return assignee === studentName || assignee === studentEmail;
+}
+
+function canStudentTransition(fromStatus, toStatus) {
+  const from = normalizeTaskStatus(fromStatus);
+  const to = normalizeTaskStatus(toStatus);
+
+  if (from === to) {
+    return true;
+  }
+
+  if (from === "todo" && to === "submitted") {
+    return true;
+  }
+
+  if (from === "rejected" && ["todo", "submitted"].includes(to)) {
+    return true;
+  }
+
+  return false;
 }
 
 async function fetchTaskById(taskId) {
@@ -31,9 +229,14 @@ async function fetchTaskById(taskId) {
             status,
             description,
             due_date AS "dueDate",
+          start_time AS "startTime",
+          end_time AS "endTime",
+           task_type AS "taskType",
+           created_by AS "createdBy",
             assignee,
             comments,
             approval_status AS "approvalStatus",
+            rejection_reason AS "rejectionReason",
             mentor_note AS "mentorNote",
             order_index AS "order",
             updated_at AS "updatedAt",
@@ -67,9 +270,14 @@ router.get("/search", async (req, res) => {
               status,
               description,
               due_date AS "dueDate",
+              start_time AS "startTime",
+              end_time AS "endTime",
+              task_type AS "taskType",
+              created_by AS "createdBy",
               assignee,
               comments,
               approval_status AS "approvalStatus",
+              rejection_reason AS "rejectionReason",
               mentor_note AS "mentorNote",
               order_index AS "order",
               updated_at AS "updatedAt",
@@ -85,7 +293,7 @@ router.get("/search", async (req, res) => {
       params
     );
 
-    return res.json(result.rows);
+    return res.json(result.rows.map(normalizeTaskRow));
   } catch {
     return res.status(500).json({ message: "Failed to search tasks." });
   }
@@ -99,9 +307,14 @@ router.get("/:projectId", async (req, res) => {
               status,
               description,
               due_date AS "dueDate",
+              start_time AS "startTime",
+              end_time AS "endTime",
+              task_type AS "taskType",
+              created_by AS "createdBy",
               assignee,
               comments,
               approval_status AS "approvalStatus",
+              rejection_reason AS "rejectionReason",
               mentor_note AS "mentorNote",
               order_index AS "order",
               updated_at AS "updatedAt",
@@ -112,7 +325,7 @@ router.get("/:projectId", async (req, res) => {
       [Number(req.params.projectId)]
     );
 
-    res.json(result.rows);
+    res.json(result.rows.map(normalizeTaskRow));
   } catch (error) {
     res.status(500).json({ message: "Failed to fetch tasks." });
   }
@@ -124,55 +337,83 @@ router.post("/", async (req, res) => {
     status,
     description,
     dueDate,
+    startTime,
+    endTime,
+    taskType,
     assignee,
     comments,
     approvalStatus,
     mentorNote,
+    rejectionReason,
     order,
     projectId,
   } = req.body;
 
-  if (!title || !status || !projectId) {
-    return res.status(400).json({ message: "title, status, and projectId are required." });
+  const normalizedStatus = normalizeTaskStatus(status);
+  const normalizedApprovalStatus = normalizeApprovalForStatus(
+    normalizedStatus,
+    normalizeApprovalStatus(approvalStatus || "not-requested")
+  );
+  const dbStatus = toDbTaskStatus(normalizedStatus);
+  const actorRole = normalizeRole(req.user.role);
+  const normalizedTaskType = normalizeTaskType(taskType);
+  const resolvedDueDate = resolveDueDateInput(dueDate, normalizedTaskType);
+
+  if (!title || !projectId) {
+    return res.status(400).json({ message: "title and projectId are required." });
   }
 
-  if (status === "COMPLETED" && req.user.role !== "MENTOR" && req.user.role !== "ADMIN") {
-    return res.status(403).json({ message: "Only mentor can create completed tasks." });
+  if (actorRole === "mentor") {
+    return res.status(403).json({ message: "Mentor cannot create tasks." });
+  }
+
+  if (!canManageTasks(actorRole) && !isManagerRole(actorRole)) {
+    return res.status(403).json({ message: "Only manager or team lead can create tasks." });
   }
 
   try {
     const result = await pool.query(
       `INSERT INTO tasks
-        (title, status, description, due_date, assignee, comments, approval_status, mentor_note, order_index, project_id)
+        (title, status, description, due_date, start_time, end_time, task_type, created_by, assignee, comments, approval_status, rejection_reason, mentor_note, order_index, project_id)
        VALUES
-        ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15)
        RETURNING id,
                  title,
                  status,
                  description,
                  due_date AS "dueDate",
+                 start_time AS "startTime",
+                 end_time AS "endTime",
+                 task_type AS "taskType",
+                 created_by AS "createdBy",
                  assignee,
                  comments,
                  approval_status AS "approvalStatus",
+                 rejection_reason AS "rejectionReason",
                  mentor_note AS "mentorNote",
                  order_index AS "order",
                  updated_at AS "updatedAt",
                  project_id AS "projectId"`,
       [
         title,
-        status,
+        dbStatus,
         description || "",
-        dueDate || null,
+        resolvedDueDate,
+        startTime || null,
+        endTime || null,
+        normalizedTaskType,
+        req.user.name || "Unknown",
         assignee || "",
         JSON.stringify(Array.isArray(comments) ? comments : []),
-        approvalStatus || "not-requested",
+        normalizedApprovalStatus,
+        rejectionReason || "",
         mentorNote || "",
         Number(order) || 0,
         Number(projectId),
       ]
     );
 
-    const createdTask = result.rows[0];
+    const createdTask = normalizeTaskRow(result.rows[0]);
     const io = req.app.get("io");
 
     io.to(`project:${createdTask.projectId}`).emit("taskUpdated", {
@@ -216,12 +457,14 @@ router.put("/reorder", async (req, res) => {
     return res.status(400).json({ message: "tasks array is required." });
   }
 
-  const containsMentorOnlyTransition = tasks.some(
-    (task) => task.status === "COMPLETED" || task.approvalStatus === "approved"
-  );
+  const containsApprovalTransition = tasks.some((task) => {
+    const normalizedStatus = normalizeTaskStatus(task.status);
+    const normalizedApprovalStatus = normalizeApprovalStatus(task.approvalStatus);
+    return ["completed", "rejected"].includes(normalizedStatus) || ["approved", "rejected", "mentor-approved"].includes(normalizedApprovalStatus);
+  });
 
-  if (containsMentorOnlyTransition && req.user.role !== "MENTOR" && req.user.role !== "ADMIN") {
-    return res.status(403).json({ message: "Only mentor can move tasks to completed." });
+  if (containsApprovalTransition && !isManagerRole(req.user.role)) {
+    return res.status(403).json({ message: "Only manager can finalize task outcomes." });
   }
 
   const client = await pool.connect();
@@ -239,7 +482,37 @@ router.put("/reorder", async (req, res) => {
       affectedProjectIds = projectLookup.rows.map((row) => row.project_id);
     }
 
+    const existingResult = await client.query(
+      `SELECT id, status, assignee, approval_status AS "approvalStatus"
+       FROM tasks
+       WHERE id = ANY($1::int[])`,
+      [taskIds]
+    );
+    const existingById = new Map(existingResult.rows.map((row) => [Number(row.id), row]));
+    const actorRole = normalizeRole(req.user.role);
+
+    if (actorRole === "student" || actorRole === "mentor") {
+      throw new Error("ROLE_REORDER_FORBIDDEN");
+    }
+
     for (const task of tasks) {
+      const incomingTaskId = Number(task.id);
+      const existingTask = existingById.get(incomingTaskId);
+      if (!existingTask) {
+        continue;
+      }
+
+      const nextStatus = normalizeTaskStatus(task.status);
+      const dbNextStatus = toDbTaskStatus(nextStatus);
+      const nextApprovalStatus = task.approvalStatus === undefined
+        ? null
+        : normalizeApprovalForStatus(nextStatus, normalizeApprovalStatus(task.approvalStatus));
+      const previousStatus = deriveAppStatus(existingTask.status, existingTask.approvalStatus);
+
+      if (actorRole === "team_lead" && ["completed", "rejected"].includes(nextStatus)) {
+        throw new Error("TEAM_LEAD_FINALIZE_FORBIDDEN");
+      }
+
       await client.query(
         `UPDATE tasks
          SET status = $1,
@@ -247,7 +520,7 @@ router.put("/reorder", async (req, res) => {
              approval_status = COALESCE($3, approval_status),
              updated_at = CURRENT_TIMESTAMP
          WHERE id = $4`,
-        [task.status, Number(task.order) || 0, task.approvalStatus || null, Number(task.id)]
+        [dbNextStatus, Number(task.order) || 0, nextApprovalStatus, incomingTaskId]
       );
     }
 
@@ -272,6 +545,12 @@ router.put("/reorder", async (req, res) => {
     return res.json({ success: true });
   } catch (error) {
     await client.query("ROLLBACK");
+    if (error?.message === "ROLE_REORDER_FORBIDDEN") {
+      return res.status(403).json({ message: "Only manager or team lead can reorder tasks." });
+    }
+    if (error?.message === "TEAM_LEAD_FINALIZE_FORBIDDEN") {
+      return res.status(403).json({ message: "Team lead cannot move tasks to completed or rejected." });
+    }
     return res.status(500).json({ message: "Failed to reorder tasks." });
   } finally {
     client.release();
@@ -284,25 +563,58 @@ router.put("/:taskId", async (req, res) => {
     status,
     description,
     dueDate,
+    startTime,
+    endTime,
+    taskType,
     assignee,
     comments,
     approvalStatus,
     mentorNote,
+    rejectionReason,
     order,
   } = req.body;
 
-  if (hasMentorOnlyUpdate({ status, approvalStatus }) && req.user.role !== "MENTOR" && req.user.role !== "ADMIN") {
-    return res.status(403).json({ message: "Only mentor can approve or complete tasks." });
+  const normalizedStatus = status === undefined ? null : normalizeTaskStatus(status);
+  const normalizedApprovalStatus = approvalStatus === undefined
+    ? null
+    : normalizeApprovalForStatus(normalizedStatus, normalizeApprovalStatus(approvalStatus));
+  const dbStatus = normalizedStatus === null ? null : toDbTaskStatus(normalizedStatus);
+  const actorRole = normalizeRole(req.user.role);
+  const normalizedTaskType = taskType === undefined ? null : normalizeTaskType(taskType);
+
+  if (hasMentorOnlyUpdate({ status: normalizedStatus, approvalStatus: normalizedApprovalStatus }) && !isManagerRole(req.user.role)) {
+    return res.status(403).json({ message: "Only manager can finalize task status." });
   }
 
   try {
     const existingTask = await pool.query(
-      `SELECT assignee FROM tasks WHERE id = $1`,
+      `SELECT id, title, status, approval_status AS "approvalStatus", assignee, project_id AS "projectId" FROM tasks WHERE id = $1`,
       [Number(req.params.taskId)]
     );
 
     if (existingTask.rowCount === 0) {
       return res.status(404).json({ message: "Task not found." });
+    }
+
+    const previousTask = existingTask.rows[0];
+    const previousStatus = deriveAppStatus(previousTask.status, previousTask.approvalStatus);
+
+    if (actorRole === "mentor") {
+      return res.status(403).json({ message: "Mentor cannot edit tasks." });
+    }
+
+    if (actorRole === "student") {
+      return res.status(403).json({ message: "Students cannot edit tasks." });
+    }
+
+    if (actorRole === "team_lead") {
+      if (["completed", "rejected"].includes(normalizedStatus)) {
+        return res.status(403).json({ message: "Team lead cannot finalize tasks." });
+      }
+
+      if (["approved", "rejected", "mentor-approved"].includes(normalizedApprovalStatus)) {
+        return res.status(403).json({ message: "Team lead cannot change review outcomes." });
+      }
     }
 
     const result = await pool.query(
@@ -311,35 +623,48 @@ router.put("/:taskId", async (req, res) => {
            status = COALESCE($2, status),
            description = COALESCE($3, description),
            due_date = $4,
-           assignee = COALESCE($5, assignee),
-           comments = COALESCE($6::jsonb, comments),
-           approval_status = COALESCE($7, approval_status),
-           mentor_note = COALESCE($8, mentor_note),
-           order_index = COALESCE($9, order_index),
+           start_time = COALESCE($5, start_time),
+           end_time = COALESCE($6, end_time),
+           task_type = COALESCE($11, task_type),
+           assignee = COALESCE($7, assignee),
+           comments = COALESCE($8::jsonb, comments),
+           approval_status = COALESCE($9, approval_status),
+           mentor_note = COALESCE($10, mentor_note),
+           order_index = COALESCE($12, order_index),
+           rejection_reason = COALESCE($13, rejection_reason),
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $10
+           WHERE id = $14
        RETURNING id,
                  title,
                  status,
                  description,
                  due_date AS "dueDate",
+                 start_time AS "startTime",
+                 end_time AS "endTime",
+                 task_type AS "taskType",
+                 created_by AS "createdBy",
                  assignee,
                  comments,
                  approval_status AS "approvalStatus",
+                 rejection_reason AS "rejectionReason",
                  mentor_note AS "mentorNote",
                  order_index AS "order",
                  updated_at AS "updatedAt",
                  project_id AS "projectId"`,
       [
         title || null,
-        status || null,
+        dbStatus,
         description || null,
         dueDate || null,
+        startTime || null,
+        endTime || null,
         assignee || null,
         Array.isArray(comments) ? JSON.stringify(comments) : null,
-        approvalStatus || null,
+        normalizedApprovalStatus,
         mentorNote || null,
+        normalizedTaskType,
         Number.isInteger(order) ? order : null,
+        rejectionReason === undefined ? null : String(rejectionReason || ""),
         Number(req.params.taskId),
       ]
     );
@@ -348,7 +673,7 @@ router.put("/:taskId", async (req, res) => {
       return res.status(404).json({ message: "Task not found." });
     }
 
-    const updatedTask = result.rows[0];
+    const updatedTask = normalizeTaskRow(result.rows[0]);
     const io = req.app.get("io");
 
     io.to(`project:${updatedTask.projectId}`).emit("taskUpdated", {
@@ -390,6 +715,10 @@ router.put("/:taskId", async (req, res) => {
 });
 
 router.delete("/:taskId", async (req, res) => {
+  if (!isManagerRole(req.user.role)) {
+    return res.status(403).json({ message: "Only manager can delete tasks." });
+  }
+
   try {
     const existing = await pool.query(
       `SELECT id, title, project_id AS "projectId" FROM tasks WHERE id = $1`,
@@ -469,7 +798,7 @@ router.post("/:taskId/comments", async (req, res) => {
                  author_role AS "authorRole",
                  text,
                  created_at AS "createdAt"`,
-      [Number(req.params.taskId), req.user.name || "Unknown", req.user.role || "STUDENT", String(comment).trim()]
+      [Number(req.params.taskId), req.user.name || "Unknown", normalizeRole(req.user.role), String(comment).trim()]
     );
 
     const task = taskResult.rows[0];
