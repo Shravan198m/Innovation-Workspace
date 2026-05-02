@@ -1,0 +1,9 @@
+{
+  "name": "innovation-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "typescript": "^6.0.3"
+  }
+}

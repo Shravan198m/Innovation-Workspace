@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Local environment secrets
+.env
+.env.*
+!.env.example
+client/.env
+server/.env
+
+# Build outputs
+client/build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime/generated artifacts
+WALKTHROUGH_TEST_RESULTS.json
+server/uploads/
+
+# Local media and temp assets
+WhatsApp Image *.jpeg
+*.tmp
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
